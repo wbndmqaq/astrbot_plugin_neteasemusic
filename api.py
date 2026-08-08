@@ -6,8 +6,6 @@ import aiohttp
 
 from .quality import QUALITY_LABEL, quality_candidates
 
-UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-
 # 模块级配置访问器，由 main.py 在插件加载时注入
 _cfg_getter = None
 
@@ -372,11 +370,6 @@ async def lyric(song_id, user_key: str = "") -> dict:
     return {"lrc": lrc, "tlyric": tly}
 
 
-async def check_music(song_id, user_key: str = "") -> dict:
-    body = await request("/check/music", {"id": song_id}, "get", user_key)
-    return {"success": bool((body or {}).get("success")), "message": (body or {}).get("message") or ""}
-
-
 async def simi_songs(song_id, limit: int = 10, user_key: str = "") -> list:
     body = await request("/simi/song", {"id": song_id, "limit": limit}, "get", user_key)
     songs = (body or {}).get("songs") or []
@@ -434,6 +427,22 @@ async def comment(song_id, limit: int = 20, user_key: str = "") -> list:
 
 
 # ──────────── 歌单 / 榜单 ────────────
+
+
+async def playlist_detail(playlist_id, user_key: str = "") -> dict | None:
+    body = await request("/playlist/detail", {"id": playlist_id}, "get", user_key)
+    pl = (body or {}).get("playlist") or {}
+    if not isinstance(pl, dict) or not pl.get("name"):
+        return None
+    creator = pl.get("creator") if isinstance(pl.get("creator"), dict) else {}
+    return {
+        "id": pl.get("id") or playlist_id,
+        "name": pl.get("name") or "",
+        "cover": pl.get("coverImgUrl") or pl.get("picUrl") or "",
+        "playCount": int(_num(pl.get("playCount"))),
+        "trackCount": int(_num(pl.get("trackCount"))),
+        "creator": creator.get("nickname") or "",
+    }
 
 
 async def playlist_tracks(playlist_id, limit: int = 1000, user_key: str = "") -> list:

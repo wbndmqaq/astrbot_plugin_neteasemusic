@@ -93,7 +93,7 @@ async def download_audio(url: str, save_dir: str, filename: str = "neteasemusic"
 
 def _schedule_cleanup(file_path: str, keep_sec: int):
     delay = max(0, keep_sec)
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
 
     def _rm():
         try:
@@ -108,7 +108,6 @@ def _schedule_cleanup(file_path: str, keep_sec: int):
 async def send_native_music_card(event, music_id: str) -> bool:
 
     try:
-        from astrbot.api.message_components import Plain  # noqa: F401
         bot = event.platform
         send_api = getattr(bot, "send_api", None) or getattr(bot, "sendApi", None)
         if send_api is None:

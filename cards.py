@@ -52,14 +52,6 @@ class SessionStore:
             pass
         return data
 
-    @classmethod
-    async def clear(cls, plugin, scope: str) -> None:
-        cls._mem.pop(str(scope), None)
-        try:
-            await plugin.delete_kv_data(cls._key(scope))
-        except Exception:
-            pass
-
 
 # ──────────── 隐私脱敏 ────────────
 
@@ -106,27 +98,17 @@ def _pay_tag(s: dict) -> str:
     return ""
 
 
-def format_song_list(lst: list, title: str, start_idx: int = 0, tip: str = "") -> str:
+def format_song_list(lst: list, title: str, tip: str = "") -> str:
     if not isinstance(lst, list) or not lst:
         return f"♫ {title}\n\n📭 暂无数据\n可能原因：\n1. API 未启动或网络异常\n2. 账号未登录（需要 #ncm登录）\n3. 请求超时，请稍后重试"
     lines = [f"♫ {title}"]
     for i, s in enumerate(lst):
-        idx = start_idx + i + 1
+        idx = i + 1
         dur = f" ({s['duration']})" if s.get("duration") else ""
         lines.append(f"{idx}. {s.get('name') or '未知'} - {s.get('artist') or '未知'}{_pay_tag(s)}{dur}")
     lines.append(f"\n发送 #ncm听序号 播放（共{len(lst)}首）")
     if tip:
         lines.append(tip)
-    return "\n".join(lines)
-
-
-def format_list_text(lst: list) -> str:
-    lines = []
-    for i, s in enumerate(lst):
-        dur = f" ({s['duration']})" if s.get("duration") else ""
-        lines.append(f"{i + 1}. {s.get('name') or '未知'} - {s.get('artist') or '未知'}{_pay_tag(s)}{dur}")
-    if not lines:
-        return "📭 暂无数据"
     return "\n".join(lines)
 
 
@@ -267,8 +249,6 @@ def build_list_card_data(keyword: str, songs: list, options: dict | None = None,
         "total": len(songs),
         "quality": str(cfg.get("quality") or "auto").upper(),
         "apiHint": api_hint_for(cfg),
-        "singerInfo": options.get("singerInfo") or "",
-        "albumInfo": options.get("albumInfo") or "",
         "songs": [
             {
                 "index": i + 1,

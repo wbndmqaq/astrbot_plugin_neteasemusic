@@ -1,6 +1,33 @@
 # 更新日志
 
 
+## [v1.0.2] - 2026-08-08
+
+Bug 修复与代码整顿：渲染改为纯本地 Playwright，修复指令识别、数字 ID 解析、Cookie 展示等若干问题。
+
+### 🐛 修复
+
+- **指令识别失效**：`_is_plugin_command_msg` 的 `\b` 在中文（CJK）字符前不构成词边界，导致 `#ncm点歌` 等中文指令无法识别、被链接解析误拦截 → 改为「ASCII 字符或词边界」判定
+- **数字 ID 命令名称为空**：`#ncm歌词/评论/相似/红心 12345` 等数字输入此前构造无名称的裸 dict，卡片标题与红心回复显示空歌名 → 数字 ID 统一走 `song_detail` / `playlist_detail`（新增端点）/ `album_detail` 补全信息
+- **歌手列表 tip 文案错误**：「热门 50 首中的前 N 首」与实际返回数量不符 → 改为「热门歌曲（共 N 首）」
+- **设置面板 Cookie 泄露**：过短 Cookie 会整段显示 → 不足 4 位一律打码
+- **`asyncio.get_event_loop()` 弃用**：3 处（扫码登录、轮询、临时文件清理）改用 `get_running_loop()`，规避 Python 3.12+ 告警 / 3.14+ 报错
+
+### 🔧 重构
+
+- 新增 `_resolve_song` / `_resolve_playlist` / `_resolve_album` 辅助方法，收敛 9 个命令的重复「数字 ID / 关键词搜索」分支
+- `_list_to_session` 文本兜底补齐 tip 传递，删除与 `_reply_card_or_text` 内部兜底重复的冗余发送
+- 删除死代码：`api.py` 未使用的 `UA` 常量、`format_song_list` 的 `start_idx` 死参数、函数内 `import random`（上移模块顶部）
+
+### 🎨 渲染
+
+- **纯本地 Playwright 渲染**：由本地 chromium 直接截图
+- 渲染失败依旧自动回退纯文本
+
+### 📌 备注
+
+- 首次使用请执行 `playwright install chromium`（Windows 下 `python -m playwright install chromium`）
+
 ## [v1.0.1] - 2026-08-08
 
 社区入口更新。

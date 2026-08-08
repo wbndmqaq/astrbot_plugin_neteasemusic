@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import random
 import re
 import time
 from pathlib import Path
@@ -24,7 +25,9 @@ NEW_SONG_AREAS = {"华语": 7, "欧美": 96, "日本": 8, "韩国": 16}
 
 
 def _is_plugin_command_msg(msg: str) -> bool:
-    return bool(re.match(r"^#?(ncm|NCM)\b|^#听\s*[1-9]|^#ncm帮助", str(msg or "").strip(), re.IGNORECASE))
+    # 注意不能用 \b：Python 正则里汉字属 \w，ncm 与中文指令之间不构成词边界，
+    # 否则 #ncm点歌 等中文指令全部误判为「非指令」；改用 ASCII 字符或词边界判定
+    return bool(re.match(r"^#?(?:ncm|NCM)(?:[^\x00-\x7F]|\b)|^#听\s*[1-9]", str(msg or "").strip(), re.IGNORECASE))
 
 
 def _is_ncm_message(text: str) -> bool:
@@ -139,6 +142,36 @@ class NeteaseMusicPlugin(Star):
     def _user_key(self, event: AstrMessageEvent) -> str:
         return str(event.get_sender_id() or "")
 
+    # ──────────── 关键词 → 资源解析 ────────────
+
+    async def _resolve_song(self, kw: str, user_key: str) -> dict | None:
+        '''关键词解析为歌曲：纯数字按 ID 拉详情（补全歌名/歌手），否则搜索第一条。'''
+        if re.fullmatch(r"\d+", kw):
+            lst = await ncmapi.song_detail([int(kw)], user_key=user_key)
+            return lst[0] if lst else None
+        lst = await ncmapi.search(kw, type_=1, limit=1, user_key=user_key)
+        return lst[0] if lst else None
+
+    async def _resolve_playlist(self, kw: str, user_key: str) -> dict | None:
+        '''关键词解析为歌单：纯数字按 ID 拉详情，否则搜索第一个。'''
+        if re.fullmatch(r"\d+", kw):
+            pl = await ncmapi.playlist_detail(int(kw), user_key=user_key)
+        else:
+            pls = await ncmapi.search_playlists(kw, limit=3, user_key=user_key)
+            pl = pls[0] if pls else None
+        if not pl:
+            return None
+        # 评论卡片取 artist 字段，歌单用创建者补位
+        return {**pl, "artist": pl.get("creator") or pl.get("artist") or ""}
+
+    async def _resolve_album(self, kw: str, user_key: str) -> dict | None:
+        '''关键词解析为专辑：纯数字按 ID 拉详情，否则搜索第一个。'''
+        if re.fullmatch(r"\d+", kw):
+            info, _songs = await ncmapi.album_detail(int(kw), user_key=user_key)
+            return info or {"id": int(kw), "name": "", "artist": "", "cover": ""}
+        albums = await ncmapi.search_albums(kw, limit=3, user_key=user_key)
+        return albums[0] if albums else None
+
     # ──────────── cookie / 登录态 ────────────
 
     def _has_cookie(self) -> bool:
@@ -204,82 +237,73 @@ class NeteaseMusicPlugin(Star):
     async def _list_to_session(self, event: AstrMessageEvent, keyword: str, songs: list, *, tip: str = "") -> bool:
 
         scope = self._scope(event)
-        await cardlib.SessionStore.set(self, scope, {"type": "songs", "keyword": keyword, "data": songs, "user_id": event.get_sender_id()})
+        await cardlib.SessionStore.set(self, scope, {"type": "songs", "keyword": keyword, "data": songs})
+        text = lambda: cardlib.format_song_list(songs, keyword, tip=tip)
         if self._cfg().get("renderListCard", True):
             data = cardlib.build_list_card_data(keyword, songs, options={"tip": tip}, cfg=self._cfg())
-            if await self._reply_card_or_text(event, tpl_name="ncm-list", data=data, format_text=lambda d: cardlib.format_song_list(songs, keyword)):
+            # _reply_card_or_text 内部已带文本兜底，返回 True 即已发送
+            if await self._reply_card_or_text(event, tpl_name="ncm-list", data=data, format_text=lambda d: text()):
                 return True
-        await self._reply(event, cardlib.format_song_list(songs, keyword))
+        await self._reply(event, text())
         return True
 
     # ──────────── 卡片渲染 ────────────
 
     async def _render_card(self, event: AstrMessageEvent, data: dict, tpl_name: str) -> str | None:
+        '''渲染 HTML 卡片：本地 Playwright 直接渲染（不依赖 AstrBot 远程 t2i 服务）。
+
+        依赖：pip install playwright && playwright install chromium
+        '''
         try:
+            import jinja2
+            from playwright.async_api import async_playwright
+
             from .tpl_adapter import get_jinja_template
             tmpl_path = os.path.join(PLUGIN_DIR, "resources", "html", tpl_name, f"{tpl_name}.html")
             if not os.path.exists(tmpl_path):
                 return None
             tmpl = get_jinja_template(tmpl_path)
-            # 必须 full_page=True，否则远程服务端锁死视口高度（720px）截断长卡片
-            url = await self.html_render(
-                tmpl,
-                {"data": data},
-                return_url=True,
-                options={"full_page": True, "type": "png", "quality": 95},
-            )
-            if not url:
-                return None
-            return await self._download_and_crop_card(url, tpl_name)
-        except Exception as e:
-            self._log_warn(f"{tpl_name} 渲染失败: {e}")
-            return None
-
-    async def _download_and_crop_card(self, url: str, tpl_name: str) -> str | None:
-        try:
-            import io
-
-            import aiohttp as _aiohttp
-            import numpy as np
-            from PIL import Image
-
+            html = jinja2.Template(tmpl).render(data=data)
+            async with async_playwright() as p:
+                browser = await p.chromium.launch()
+                try:
+                    page = await browser.new_page(
+                        viewport={"width": 640, "height": 800},
+                        device_scale_factor=2,  # 2x 清晰度
+                    )
+                    await page.set_content(html, wait_until="load", timeout=30000)
+                    try:
+                        await page.wait_for_load_state("networkidle", timeout=8000)
+                    except Exception:
+                        pass
+                    # 收缩视口到 .page 实际渲染边界：viewport 固定时 body 不会随
+                    # fit-content 收缩，截图右侧/底部会留大片浅红空白（白边）
+                    try:
+                        rect = await page.evaluate(
+                            "() => { const el = document.querySelector('.page') || document.body; "
+                            "const r = el.getBoundingClientRect(); "
+                            "return { w: Math.max(1, Math.ceil(r.right)), "
+                            "h: Math.max(1, Math.ceil(r.bottom)) }; }"
+                        )
+                        await page.set_viewport_size({"width": rect["w"], "height": rect["h"]})
+                        await page.wait_for_timeout(50)
+                    except Exception:
+                        pass
+                    # png 截图不支持 quality 参数（playwright 限制）
+                    raw = await page.screenshot(full_page=True, type="png")
+                finally:
+                    await browser.close()
             from .delivery import get_temp_dir
-
-            async with _aiohttp.ClientSession(timeout=_aiohttp.ClientTimeout(total=30)) as sess, sess.get(url) as r:
-                if r.status != 200:
-                    return None
-                raw = await r.read()
-            im = Image.open(io.BytesIO(raw)).convert("RGB")
-            arr = np.asarray(im, dtype=np.int16)
-            # 背景色 = 四角平均色（模板统一浅红 #fdeeee）
-            corners = np.concatenate(
-                [
-                    arr[:6, :6].reshape(-1, 3),
-                    arr[:6, -6:].reshape(-1, 3),
-                    arr[-6:, :6].reshape(-1, 3),
-                    arr[-6:, -6:].reshape(-1, 3),
-                ]
-            )
-            bg = corners.mean(axis=0)
-            mask = np.abs(arr - bg).sum(axis=2) > 30
-            ys, xs = np.where(mask)
-            if len(xs) == 0:
-                return None
-            pad = 16
-            x0, x1 = max(0, int(xs.min()) - pad), min(im.width, int(xs.max()) + pad + 1)
-            y0, y1 = max(0, int(ys.min()) - pad), min(im.height, int(ys.max()) + pad + 1)
-            if x1 - x0 < 100 or y1 - y0 < 100:
-                x0, y0, x1, y1 = 0, 0, im.width, im.height
-            crop = im.crop((x0, y0, x1, y1))
             d = get_temp_dir(self._cfg(), PLUGIN_DIR)
             file_path = os.path.join(d, f"card_{tpl_name}_{int(time.time() * 1000)}.png")
-            crop.save(file_path, "PNG")
+            with open(file_path, "wb") as f:
+                f.write(raw)
             return file_path
         except Exception as e:
-            self._log_warn(f"卡片裁剪失败: {e}")
+            self._log_warn(f"{tpl_name} 本地渲染失败: {e}")
             return None
 
-    async def _reply_card_or_text(self, event: AstrMessageEvent, *, tpl_name: str, data: dict, format_text, fallback_text: str | None = None) -> bool:
+    async def _reply_card_or_text(self, event: AstrMessageEvent, *, tpl_name: str, data: dict, format_text) -> bool:
         card_path = None
         try:
             card_path = await self._render_card(event, data, tpl_name)
@@ -292,12 +316,12 @@ class NeteaseMusicPlugin(Star):
             # 卡片图片为临时文件，发出后即清理（与二维码/音频一致），复用 keepFileSec 配置；
             # 置于 finally 以保证发送失败留下孤儿文件时也能删除
             if card_path:
-                asyncio.get_event_loop().call_later(
+                asyncio.get_running_loop().call_later(
                     max(0, int(self._cfg().get("keepFileSec", 60))),
                     lambda: self._safe_unlink(card_path),
                 )
         try:
-            text = format_text(data) if callable(format_text) else (fallback_text or "")
+            text = format_text(data)
             if text:
                 await self._send_chain(event, self._plain(text))
                 return True
@@ -420,15 +444,11 @@ class NeteaseMusicPlugin(Star):
             return
         try:
             user_key = self._user_key(event)
-            if re.fullmatch(r"\d+", kw):
-                song = {"id": int(kw), "name": "", "artist": "", "album": "", "cover": ""}
-            else:
-                lst = await ncmapi.search(kw, type_=1, limit=1, user_key=user_key)
-                if not lst:
-                    await self._reply(event, f"没有搜到「{kw}」")
-                    event.stop_event()
-                    return
-                song = lst[0]
+            song = await self._resolve_song(kw, user_key)
+            if not song:
+                await self._reply(event, f"没有搜到「{kw}」")
+                event.stop_event()
+                return
             lr = await ncmapi.lyric(song["id"], user_key=user_key)
             lines = self._extract_lyric_lines(lr.get("lrc") or "", lr.get("tlyric") or "")
             data = cardlib.build_lyric_card_data(song, lines, line_count=len(lines))
@@ -521,7 +541,7 @@ class NeteaseMusicPlugin(Star):
             if not name:
                 # 无参数：列出全部榜单
                 scope = self._scope(event)
-                await cardlib.SessionStore.set(self, scope, {"type": "topCategory", "data": tops, "user_id": event.get_sender_id()})
+                await cardlib.SessionStore.set(self, scope, {"type": "topCategory", "data": tops})
                 lines = [f"♫ 网易云排行榜（{len(tops)} 个）", ""]
                 for t in tops:
                     lines.append(f"{t['index']}. {t['name']}（{t['updateFrequency'] or '未知更新频率'}）")
@@ -577,7 +597,7 @@ class NeteaseMusicPlugin(Star):
                 await self._reply(event, f"歌手「{a['name']}」暂无热门歌曲")
                 event.stop_event()
                 return
-            await self._list_to_session(event, f"歌手 · {a['name']}", songs, tip=f"歌手：{a['name']} 的热门 50 首中的前 {len(songs)} 首")
+            await self._list_to_session(event, f"歌手 · {a['name']}", songs, tip=f"歌手：{a['name']} 的热门歌曲（共 {len(songs)} 首）")
         except ApiError as err:
             self._log_warn(f"歌手失败: {err}")
             await self._reply(event, f"获取歌手歌曲失败：{err}")
@@ -649,15 +669,11 @@ class NeteaseMusicPlugin(Star):
         kw = (m.group(1).strip() if m else "").strip()
         user_key = self._user_key(event)
         try:
-            if re.fullmatch(r"\d+", kw):
-                song = {"id": int(kw), "name": "", "artist": "", "album": "", "cover": ""}
-            else:
-                lst = await ncmapi.search(kw, type_=1, limit=3, user_key=user_key)
-                if not lst:
-                    await self._reply(event, f"没有搜到「{kw}」")
-                    event.stop_event()
-                    return
-                song = lst[0]
+            song = await self._resolve_song(kw, user_key)
+            if not song:
+                await self._reply(event, f"没有搜到「{kw}」")
+                event.stop_event()
+                return
             comments = await ncmapi.comment(song["id"], limit=20, user_key=user_key)
             if not comments:
                 await self._reply(event, "该歌曲暂无评论")
@@ -680,21 +696,17 @@ class NeteaseMusicPlugin(Star):
         kw = (m.group(1).strip() if m else "").strip()
         user_key = self._user_key(event)
         try:
-            if re.fullmatch(r"\d+", kw):
-                song_id = int(kw)
-            else:
-                lst = await ncmapi.search(kw, type_=1, limit=1, user_key=user_key)
-                if not lst:
-                    await self._reply(event, f"没有搜到「{kw}」")
-                    event.stop_event()
-                    return
-                song_id = lst[0]["id"]
-            songs = await ncmapi.simi_songs(song_id, limit=10, user_key=user_key)
+            song = await self._resolve_song(kw, user_key)
+            if not song:
+                await self._reply(event, f"没有搜到「{kw}」")
+                event.stop_event()
+                return
+            songs = await ncmapi.simi_songs(song["id"], limit=10, user_key=user_key)
             if not songs:
                 await self._reply(event, "暂无相似歌曲")
                 event.stop_event()
                 return
-            await self._list_to_session(event, f"相似歌曲 · {kw}", songs)
+            await self._list_to_session(event, f"相似歌曲 · {song['name'] or kw}", songs)
         except ApiError as err:
             self._log_warn(f"相似失败: {err}")
             await self._reply(event, f"获取相似歌曲失败：{err}")
@@ -710,21 +722,17 @@ class NeteaseMusicPlugin(Star):
         kw = (m.group(1).strip() if m else "").strip()
         user_key = self._user_key(event)
         try:
-            if re.fullmatch(r"\d+", kw):
-                song_id = int(kw)
-            else:
-                lst = await ncmapi.search(kw, type_=1, limit=1, user_key=user_key)
-                if not lst:
-                    await self._reply(event, f"没有搜到「{kw}」")
-                    event.stop_event()
-                    return
-                song_id = lst[0]["id"]
-            pls = await ncmapi.related_playlists(song_id, limit=10, user_key=user_key)
+            song = await self._resolve_song(kw, user_key)
+            if not song:
+                await self._reply(event, f"没有搜到「{kw}」")
+                event.stop_event()
+                return
+            pls = await ncmapi.related_playlists(song["id"], limit=10, user_key=user_key)
             if not pls:
                 await self._reply(event, "暂无相关歌单")
                 event.stop_event()
                 return
-            lines = [f"♫ 包含「{kw}」的歌单"]
+            lines = [f"♫ 包含「{song['name'] or kw}」的歌单"]
             for p in pls:
                 lines.append(f"{p['index']}. {p['name']}（{cardlib.fmt_count(p['playCount'])}播放 · {p['trackCount']}首）")
             lines.append("")
@@ -895,21 +903,17 @@ class NeteaseMusicPlugin(Star):
         kw = (m.group(1).strip() if m else "").strip()
         user_key = self._user_key(event)
         try:
-            if re.fullmatch(r"\d+", kw):
-                song_id = int(kw)
-            else:
-                lst = await ncmapi.search(kw, type_=1, limit=1, user_key=user_key)
-                if not lst:
-                    await self._reply(event, f"没有搜到「{kw}」")
-                    event.stop_event()
-                    return
-                song_id = lst[0]["id"]
-            pls = await ncmapi.simi_playlists(song_id, limit=10, user_key=user_key)
+            song = await self._resolve_song(kw, user_key)
+            if not song:
+                await self._reply(event, f"没有搜到「{kw}」")
+                event.stop_event()
+                return
+            pls = await ncmapi.simi_playlists(song["id"], limit=10, user_key=user_key)
             if not pls:
                 await self._reply(event, "暂无相似歌单")
                 event.stop_event()
                 return
-            lines = [f"♫ 与「{kw}」相似的歌单"]
+            lines = [f"♫ 与「{song['name'] or kw}」相似的歌单"]
             for p in pls:
                 lines.append(f"{p['index']}. {p['name']}（{cardlib.fmt_count(p['playCount'])}播放 · {p['trackCount']}首）")
             lines.append("")
@@ -1119,15 +1123,11 @@ class NeteaseMusicPlugin(Star):
         kw = (m.group(1).strip() if m else "").strip()
         user_key = self._user_key(event)
         try:
-            if re.fullmatch(r"\d+", kw):
-                song = {"id": int(kw), "name": "", "artist": "", "album": "", "cover": ""}
-            else:
-                lst = await ncmapi.search(kw, type_=1, limit=1, user_key=user_key)
-                if not lst:
-                    await self._reply(event, f"没有搜到「{kw}」")
-                    event.stop_event()
-                    return
-                song = lst[0]
+            song = await self._resolve_song(kw, user_key)
+            if not song:
+                await self._reply(event, f"没有搜到「{kw}」")
+                event.stop_event()
+                return
             lr = await ncmapi.lyric_new(song["id"], user_key=user_key)
             yrc = lr.get("yrc") or ""
             if not yrc:
@@ -1188,15 +1188,11 @@ class NeteaseMusicPlugin(Star):
         kw = (m.group(1).strip() if m else "").strip()
         user_key = self._user_key(event)
         try:
-            if re.fullmatch(r"\d+", kw):
-                pl = {"id": int(kw), "name": "", "artist": "", "album": "", "cover": ""}
-            else:
-                pls = await ncmapi.search_playlists(kw, limit=3, user_key=user_key)
-                if not pls:
-                    await self._reply(event, f"没有搜到歌单「{kw}」")
-                    event.stop_event()
-                    return
-                pl = {"id": pls[0]["id"], "name": pls[0]["name"], "artist": pls[0].get("creator") or "", "album": "", "cover": pls[0].get("cover") or ""}
+            pl = await self._resolve_playlist(kw, user_key)
+            if not pl:
+                await self._reply(event, f"没有搜到歌单「{kw}」")
+                event.stop_event()
+                return
             comments = await ncmapi.comment_playlist(pl["id"], limit=20, user_key=user_key)
             if not comments:
                 await self._reply(event, "该歌单暂无评论")
@@ -1219,15 +1215,11 @@ class NeteaseMusicPlugin(Star):
         kw = (m.group(1).strip() if m else "").strip()
         user_key = self._user_key(event)
         try:
-            if re.fullmatch(r"\d+", kw):
-                album = {"id": int(kw), "name": "", "artist": "", "album": "", "cover": ""}
-            else:
-                albums = await ncmapi.search_albums(kw, limit=3, user_key=user_key)
-                if not albums:
-                    await self._reply(event, f"没有搜到专辑「{kw}」")
-                    event.stop_event()
-                    return
-                album = {"id": albums[0]["id"], "name": albums[0]["name"], "artist": albums[0].get("artist") or "", "album": "", "cover": albums[0].get("cover") or ""}
+            album = await self._resolve_album(kw, user_key)
+            if not album:
+                await self._reply(event, f"没有搜到专辑「{kw}」")
+                event.stop_event()
+                return
             comments = await ncmapi.comment_album(album["id"], limit=20, user_key=user_key)
             if not comments:
                 await self._reply(event, "该专辑暂无评论")
@@ -1282,7 +1274,6 @@ class NeteaseMusicPlugin(Star):
                 await self._reply(event, "没有拿到推荐歌曲，请稍后再试")
                 event.stop_event()
                 return
-            import random
             song = random.choice(songs)
             await self._play_song(event, song, user_key=user_key, source="推荐")
         except ApiError as err:
@@ -1493,15 +1484,11 @@ class NeteaseMusicPlugin(Star):
         kw = (m.group(1).strip() if m else "").strip()
         user_key = self._user_key(event)
         try:
-            if re.fullmatch(r"\d+", kw):
-                song = {"id": int(kw), "name": "", "artist": "", "album": "", "cover": ""}
-            else:
-                lst = await ncmapi.search(kw, type_=1, limit=1, user_key=user_key)
-                if not lst:
-                    await self._reply(event, f"没有搜到「{kw}」")
-                    event.stop_event()
-                    return
-                song = lst[0]
+            song = await self._resolve_song(kw, user_key)
+            if not song:
+                await self._reply(event, f"没有搜到「{kw}」")
+                event.stop_event()
+                return
             try:
                 checked = await ncmapi.song_like_check([song["id"]], user_key=user_key)
                 liked = checked.get(str(song["id"]), False)
@@ -1574,8 +1561,7 @@ class NeteaseMusicPlugin(Star):
                     img_sent = True
                 except Exception:
                     pass
-                loop = asyncio.get_event_loop()
-                loop.call_later(120, lambda: self._safe_unlink(qr_path))
+                asyncio.get_running_loop().call_later(120, lambda: self._safe_unlink(qr_path))
             if not img_sent:
                 await self._reply(event, tip_text + (f"\n或打开链接扫码：{qrurl}" if qrurl else ""))
             self._start_poll(event, key, 300)
@@ -1596,7 +1582,7 @@ class NeteaseMusicPlugin(Star):
         started = time.time()
         task = {"key": key, "stopped": False, "busy": False, "notifiedScan": False, "failStreak": 0}
         self._active_logins[user_key] = task
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
         async def _tick():
             if task["stopped"]:
@@ -1753,10 +1739,12 @@ class NeteaseMusicPlugin(Star):
         except Exception:
             uid = ""
         default_cookie = str(cfg.get("defaultCookie") or "")
+        # Cookie 尾号仅作「是否已配置」提示，过短的 Cookie 直接打码避免完整泄露
+        cookie_tail = default_cookie[-4:] if len(default_cookie) >= 4 else "****"
         lines = [
             "🎵 网易云音乐插件设置",
             f"API：{cardlib.mask_api_base(cfg.get('apiBase') or '') or '未配置'}",
-            f"默认Cookie：{'已配置（***' + default_cookie[-4:] + '）' if default_cookie else '未配置'}",
+            f"默认Cookie：{'已配置（***' + cookie_tail + '）' if default_cookie else '未配置'}",
             f"点歌：{'开' if cfg.get('enableSongRequest', True) else '关'}　自动解析：{'开' if cfg.get('enableResolve', True) else '关'}",
             f"音质：{QUALITY_LABEL.get(cfg.get('quality') or 'auto', cfg.get('quality') or 'auto')}",
             f"解灰兜底：{'开' if cfg.get('qualityUnblock', True) else '关'}",

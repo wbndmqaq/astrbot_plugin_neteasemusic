@@ -1,1 +1,3 @@
 aiohttp>=3.9.0
+# 本地 HTML→图片 卡片渲染（部署后需执行: playwright install chromium）
+playwright>=1.40.0
