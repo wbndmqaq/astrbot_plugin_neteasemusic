@@ -258,7 +258,7 @@ A：默认 60 秒自动清理。如仍堆积，检查 `keepFileSec` 是否被设
 ## 🙏 致谢
 
 - [api-enhanced](https://github.com/neteasecloudmusicapienhanced/api-enhanced) — 网易云音乐 API 服务
-- [AstrBot](https://github.com/Soulter/AstrBot) — 多平台聊天机器人框架
+- [AstrBot](https://github.com/AstrBotDevs/AstrBot) — 多平台聊天机器人框架
 
 ---
 
