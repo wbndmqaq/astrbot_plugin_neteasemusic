@@ -254,7 +254,11 @@ A：确认 `enableResolve` 与 `resolveLinks` 均开启，且消息中含完整 
 A：默认 60 秒自动清理。如仍堆积，检查 `keepFileSec` 是否被设为过大值；设为 `0` 即时清理。
 
 ---
+## 📮 用户群
 
+QQ 群：[点击加入](https://qm.qq.com/q/8sOZdZTnaw)
+
+---
 ## 🙏 致谢
 
 - [api-enhanced](https://github.com/neteasecloudmusicapienhanced/api-enhanced) — 网易云音乐 API 服务
