@@ -99,6 +99,12 @@ def _num(v: Any) -> float:
 async def request(pathname: str, params: dict | None = None, method: str = "get", user_key: str = "") -> dict:
     params = dict(params or {})
     base = _get_base()
+    if not base:
+        # 空 base 会拼出 "/cloudsearch" 这类无协议 URL，aiohttp 报 InvalidURL，
+        # 错误信息令人费解；直接给出可操作的配置提示
+        raise ApiError("API 地址未配置：请发送 #ncm api <地址>，或在插件设置面板填写 apiBase")
+    if "://" not in base:
+        raise ApiError(f"API 地址格式错误（缺少 http:// 协议头）：{base}")
     url = f"{base}{pathname if pathname.startswith('/') else '/' + pathname}"
     cookie = _get_cookie(user_key)
     if cookie:

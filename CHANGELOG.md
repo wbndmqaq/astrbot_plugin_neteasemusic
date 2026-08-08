@@ -12,6 +12,7 @@ Bug 修复与代码整顿：渲染改为纯本地 Playwright，修复指令识�
 - **歌手列表 tip 文案错误**：「热门 50 首中的前 N 首」与实际返回数量不符 → 改为「热门歌曲（共 N 首）」
 - **设置面板 Cookie 泄露**：过短 Cookie 会整段显示 → 不足 4 位一律打码
 - **`asyncio.get_event_loop()` 弃用**：3 处（扫码登录、轮询、临时文件清理）改用 `get_running_loop()`，规避 Python 3.12+ 告警 / 3.14+ 报错
+- **API 未配置报错不明确**：`apiBase` 为空时请求 URL 拼出 `/cloudsearch` 这类无协议地址，aiohttp 抛 `InvalidURL`，被显示成令人费解的「网络错误：/cloudsearch」→ 请求前显式校验空地址与缺失 `http://` 协议头，直接提示「#ncm api <地址>」配置方式
 
 ### 🔧 重构
 
