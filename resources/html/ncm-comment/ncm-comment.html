@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>网易云音乐 · 热评</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    :root {
+      --nm: #ec4141;
+      --nm-deep: #c62f2f;
+      --text: #3d2424;
+      --muted: #8a6b6b;
+      --line: rgba(236, 65, 65, 0.15);
+      --soft: #fdeeee;
+      --chip: rgba(236, 65, 65, 0.08);
+    }
+
+    html, body {
+      width: fit-content;
+      height: fit-content;
+      min-width: 0;
+      min-height: 0;
+      margin: 0;
+      padding: 0;
+      background: #fdeeee !important;
+      font-family: "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Noto Sans SC", sans-serif;
+      color: var(--text);
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+      text-rendering: geometricPrecision;
+    }
+
+    .page {
+      display: block;
+      width: fit-content;
+      margin: 0;
+      padding: 16px;
+      background: #fdeeee;
+    }
+
+    .card {
+      width: 560px;
+      border-radius: 28px;
+      overflow: hidden;
+      position: relative;
+      isolation: isolate;
+      background: linear-gradient(165deg, #fdf7f7 0%, #fdf0f0 42%, #fbe8e8 100%);
+      border: 1px solid rgba(236, 65, 65, 0.18);
+      box-shadow:
+        0 1px 0 rgba(255, 255, 255, 0.85) inset,
+        0 14px 28px rgba(120, 30, 30, 0.12);
+    }
+
+    .hero {
+      padding: 22px 24px 18px;
+      border-radius: 28px 28px 0 0;
+      overflow: hidden;
+      position: relative;
+      color: #fff;
+      background:
+        radial-gradient(circle at 88% 18%, rgba(255,255,255,0.28) 0%, transparent 42%),
+        linear-gradient(135deg, #f0605a 0%, #ec4141 50%, #d63333 100%);
+    }
+
+    .hero-main { display: flex; gap: 16px; align-items: center; min-width: 0; }
+
+    .cover {
+      width: 72px;
+      height: 72px;
+      border-radius: 16px;
+      object-fit: cover;
+      border: 2px solid rgba(255,255,255,0.4);
+      box-shadow: 0 8px 18px rgba(0,0,0,0.2);
+      flex-shrink: 0;
+      display: block;
+      background: rgba(255,255,255,0.15);
+    }
+
+    .cover.ph {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 28px;
+      font-weight: 800;
+    }
+
+    .hero-text { flex: 1; min-width: 0; }
+
+    .eyebrow {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 2.6px;
+      opacity: 0.86;
+      text-transform: uppercase;
+    }
+
+    .song-name {
+      margin-top: 6px;
+      font-size: 23px;
+      font-weight: 800;
+      line-height: 1.25;
+      text-shadow: 0 2px 10px rgba(0,0,0,0.1);
+    }
+
+    .song-singer {
+      margin-top: 5px;
+      font-size: 13px;
+      font-weight: 500;
+      opacity: 0.9;
+    }
+
+    .hero-pill {
+      flex-shrink: 0;
+      padding: 6px 12px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.18);
+      border: 1px solid rgba(255,255,255,0.3);
+      font-size: 11px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .body { padding: 18px 18px 16px; }
+
+    .comment-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .comment {
+      display: grid;
+      grid-template-columns: 44px 1fr;
+      gap: 12px;
+      padding: 13px 14px;
+      border-radius: 16px;
+      background: linear-gradient(165deg, #ffffff 0%, #fdf6f6 100%);
+      border: 1px solid var(--line);
+      box-shadow: 0 4px 12px rgba(120, 30, 30, 0.05);
+    }
+
+    .avatar {
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      object-fit: cover;
+      display: block;
+      background: linear-gradient(135deg, #f2b9b5, #e8918b);
+      color: #fff;
+      font-size: 18px;
+      font-weight: 800;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+
+    .comment-main { min-width: 0; }
+
+    .comment-head {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .comment-nick {
+      font-size: 13px;
+      font-weight: 800;
+      color: var(--nm-deep);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .comment-hot {
+      font-size: 10px;
+      font-weight: 800;
+      padding: 2px 7px;
+      border-radius: 999px;
+      background: var(--chip);
+      border: 1px solid var(--line);
+      color: var(--nm-deep);
+      flex-shrink: 0;
+    }
+
+    .comment-meta {
+      margin-top: 2px;
+      font-size: 11px;
+      color: var(--muted);
+      font-weight: 500;
+    }
+
+    .comment-content {
+      margin-top: 7px;
+      font-size: 14px;
+      font-weight: 500;
+      line-height: 1.55;
+      letter-spacing: 0.2px;
+      word-break: break-all;
+    }
+
+    .comment-empty {
+      padding: 18px 10px;
+      font-size: 13px;
+      color: var(--muted);
+      text-align: center;
+    }
+
+    .tips {
+      margin-top: 12px;
+      padding: 12px 14px;
+      border-radius: 16px;
+      background:
+        radial-gradient(circle at 100% 0%, rgba(236,65,65,0.12), transparent 50%),
+        linear-gradient(160deg, #fdf0f0, #fbe4e4);
+      border: 1px solid var(--line);
+    }
+
+    .tips-title {
+      font-size: 12px;
+      font-weight: 800;
+      color: var(--nm-deep);
+      margin-bottom: 6px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .tips-title span {
+      display: inline-flex;
+      width: 18px;
+      height: 18px;
+      border-radius: 6px;
+      background: var(--nm);
+      color: #fff;
+      font-size: 11px;
+      align-items: center;
+      justify-content: center;
+      font-weight: 800;
+    }
+
+    .tips-body {
+      font-size: 11.5px;
+      color: var(--muted);
+      line-height: 1.55;
+      font-weight: 500;
+    }
+
+    .footer {
+      margin-top: 12px;
+      padding: 4px 6px 2px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .footer-left {
+      font-size: 10.5px;
+      color: var(--muted);
+      font-weight: 600;
+      max-width: 380px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .footer-right {
+      font-size: 10.5px;
+      color: var(--nm-deep);
+      font-weight: 700;
+      opacity: 0.9;
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <div class="card">
+      <div class="hero">
+        <div class="hero-main">
+          {{if data.cover}}
+          <img class="cover" src="{{data.cover}}" referrerpolicy="no-referrer" />
+          {{else}}
+          <div class="cover ph">♪</div>
+          {{/if}}
+          <div class="hero-text">
+            <div class="eyebrow">NCM COMMENT</div>
+            <div class="song-name">{{data.songName}}</div>
+            <div class="song-singer">{{data.singerName}}</div>
+          </div>
+          <div class="hero-pill">{{data.total || 0}} 条</div>
+        </div>
+      </div>
+
+      <div class="body">
+        {{if data.comments}}
+        <div class="comment-list">
+          {{each data.comments c}}
+          <div class="comment">
+            {{if c.avatar}}
+            <img class="avatar" src="{{c.avatar}}" referrerpolicy="no-referrer" />
+            {{else}}
+            <div class="avatar" style="display:flex;">{{c.avatarPh}}</div>
+            {{/if}}
+            <div class="comment-main">
+              <div class="comment-head">
+                <div class="comment-nick">{{c.nick}}</div>
+                {{if c.hot}}<div class="comment-hot">热评</div>{{/if}}
+              </div>
+              <div class="comment-meta">{{c.time}} · ♥ {{c.likes}}</div>
+              <div class="comment-content">{{c.content}}</div>
+            </div>
+          </div>
+          {{/each}}
+        </div>
+        {{else}}
+        <div class="comment-empty">📭 暂无评论</div>
+        {{/if}}
+
+        <div class="tips">
+          <div class="tips-title"><span>!</span>小提示</div>
+          <div class="tips-body">{{data.tip || '评论来自网易云音乐'}}</div>
+        </div>
+
+        <div class="footer">
+          <div class="footer-left">{{data.songName}} · {{data.singerName}}</div>
+          <div class="footer-right">astrbot_plugin_neteasemusic</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

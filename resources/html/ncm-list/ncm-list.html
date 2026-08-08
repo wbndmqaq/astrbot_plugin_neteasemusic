@@ -1,0 +1,547 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>网易云音乐 · 点歌结果</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    :root {
+      --nm: #ec4141;
+      --nm-deep: #c62f2f;
+      --text: #3d2424;
+      --muted: #8a6b6b;
+      --line: rgba(236, 65, 65, 0.15);
+      --soft: #fdeeee;
+      --chip: rgba(236, 65, 65, 0.08);
+      --pay: #d99a2b;
+      --pay-bg: #fdf3e0;
+    }
+
+    html, body {
+      width: fit-content;
+      height: fit-content;
+      min-width: 0;
+      min-height: 0;
+      margin: 0;
+      padding: 0;
+      /* 不透明浅红底，避免 QQ 协议把透明 PNG 填成白底 */
+      background: #fdeeee !important;
+      font-family: "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Noto Sans SC", sans-serif;
+      color: var(--text);
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+      text-rendering: geometricPrecision;
+    }
+
+    .page {
+      display: block;
+      width: fit-content;
+      margin: 0;
+      padding: 16px;
+      background: #fdeeee;
+    }
+
+    .card {
+      width: 560px;
+      border-radius: 28px;
+      overflow: hidden;
+      position: relative;
+      isolation: isolate;
+      background: linear-gradient(165deg, #fdf7f7 0%, #fdf0f0 42%, #fbe8e8 100%);
+      border: 1px solid rgba(236, 65, 65, 0.18);
+      box-shadow:
+        0 1px 0 rgba(255, 255, 255, 0.85) inset,
+        0 14px 28px rgba(120, 30, 30, 0.12);
+    }
+
+    .hero {
+      padding: 26px 24px 22px;
+      border-radius: 28px 28px 0 0;
+      overflow: hidden;
+      position: relative;
+      color: #fff;
+      background:
+        radial-gradient(circle at 88% 18%, rgba(255,255,255,0.28) 0%, transparent 42%),
+        radial-gradient(circle at 12% 90%, rgba(0,0,0,0.08) 0%, transparent 45%),
+        linear-gradient(135deg, #f0605a 0%, #ec4141 50%, #d63333 100%);
+    }
+
+    .hero-top {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 14px;
+    }
+
+    .brand-mark {
+      width: 48px;
+      height: 48px;
+      border-radius: 16px;
+      background: rgba(255,255,255,0.2);
+      border: 1px solid rgba(255,255,255,0.35);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 24px;
+      font-weight: 800;
+      box-shadow: 0 8px 18px rgba(0,0,0,0.12);
+      flex-shrink: 0;
+    }
+
+    .hero-text { flex: 1; min-width: 0; }
+
+    .eyebrow {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 2.6px;
+      opacity: 0.86;
+      text-transform: uppercase;
+    }
+
+    .title {
+      margin-top: 6px;
+      font-size: 26px;
+      font-weight: 800;
+      line-height: 1.2;
+      text-shadow: 0 2px 10px rgba(0,0,0,0.1);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 320px;
+    }
+
+    .subtitle {
+      margin-top: 6px;
+      font-size: 13px;
+      font-weight: 500;
+      opacity: 0.9;
+      line-height: 1.45;
+    }
+
+    .version-pill {
+      flex-shrink: 0;
+      padding: 6px 12px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.18);
+      border: 1px solid rgba(255,255,255,0.3);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.4px;
+      white-space: nowrap;
+    }
+
+    .hero-stats {
+      margin-top: 18px;
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+    }
+
+    .stat {
+      padding: 10px 10px 9px;
+      border-radius: 14px;
+      background: rgba(255,255,255,0.14);
+      border: 1px solid rgba(255,255,255,0.22);
+      text-align: center;
+    }
+
+    .stat-num {
+      font-size: 18px;
+      font-weight: 800;
+      line-height: 1.1;
+    }
+
+    .stat-label {
+      margin-top: 3px;
+      font-size: 11px;
+      opacity: 0.88;
+      font-weight: 600;
+    }
+
+    .body {
+      padding: 18px 18px 16px;
+    }
+
+    .section {
+      margin-bottom: 12px;
+    }
+
+    .section:last-child { margin-bottom: 0; }
+
+    .section-head {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 2px 4px 10px;
+    }
+
+    .section-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: linear-gradient(145deg, #f5786e, #d63333);
+      box-shadow: 0 0 0 3px rgba(236, 65, 65, 0.15);
+    }
+
+    .section-title {
+      font-size: 14px;
+      font-weight: 800;
+      letter-spacing: 0.3px;
+    }
+
+    .section-tag {
+      margin-left: auto;
+      font-size: 10px;
+      font-weight: 700;
+      color: var(--nm-deep);
+      background: var(--soft);
+      border: 1px solid var(--line);
+      padding: 3px 8px;
+      border-radius: 999px;
+    }
+
+    .cmd-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .cmd {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 8px 12px;
+      align-items: center;
+      padding: 12px 14px;
+      border-radius: 16px;
+      background: linear-gradient(165deg, #ffffff 0%, #fdf6f6 100%);
+      border: 1px solid var(--line);
+      box-shadow: 0 4px 12px rgba(120, 30, 30, 0.05);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .cmd::before {
+      content: "";
+      position: absolute;
+      left: 0; top: 0; bottom: 0;
+      width: 3px;
+      background: linear-gradient(180deg, #f5786e, #d63333);
+      border-radius: 0 2px 2px 0;
+      opacity: 0.85;
+    }
+
+    .cmd-main { min-width: 0; padding-left: 4px; }
+
+    .cmd-name {
+      font-size: 15px;
+      font-weight: 800;
+      line-height: 1.35;
+      letter-spacing: 0.15px;
+    }
+
+    .cmd-desc {
+      margin-top: 4px;
+      font-size: 12.5px;
+      color: var(--muted);
+      font-weight: 500;
+      line-height: 1.45;
+    }
+
+    .cmd-example {
+      justify-self: end;
+      max-width: 200px;
+      padding: 6px 10px;
+      border-radius: 10px;
+      background: var(--chip);
+      border: 1px solid rgba(236, 65, 65, 0.18);
+      color: var(--nm-deep);
+      font-size: 12px;
+      font-weight: 700;
+      font-family: "Cascadia Code", "Consolas", "SF Mono", monospace;
+      letter-spacing: 0;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .song-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .song {
+      display: grid;
+      grid-template-columns: 40px 48px 1fr auto;
+      gap: 10px;
+      align-items: center;
+      padding: 12px 14px;
+      border-radius: 16px;
+      background: linear-gradient(165deg, #ffffff 0%, #fdf6f6 100%);
+      border: 1px solid var(--line);
+      box-shadow: 0 4px 12px rgba(120, 30, 30, 0.05);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .song::before {
+      content: "";
+      position: absolute;
+      left: 0; top: 0; bottom: 0;
+      width: 3px;
+      background: linear-gradient(180deg, #f5786e, #d63333);
+      border-radius: 0 2px 2px 0;
+      opacity: 0.85;
+    }
+
+    .song-idx {
+      font-size: 16px;
+      font-weight: 800;
+      color: var(--nm-deep);
+      text-align: center;
+      padding-left: 4px;
+      font-family: "Cascadia Code", "Consolas", "SF Mono", monospace;
+    }
+
+    .song-cover {
+      width: 48px;
+      height: 48px;
+      border-radius: 12px;
+      object-fit: cover;
+      background: linear-gradient(135deg, #fdeeee, #f9dcdc);
+      flex-shrink: 0;
+      display: block;
+    }
+
+    .song-cover.ph {
+      background: linear-gradient(135deg, #f2b9b5, #e8918b);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #fff;
+      font-size: 20px;
+      font-weight: 800;
+    }
+
+    .song-main { min-width: 0; }
+
+    .song-name {
+      font-size: 15px;
+      font-weight: 800;
+      line-height: 1.3;
+      letter-spacing: 0.15px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .song-singer {
+      margin-top: 4px;
+      font-size: 12.5px;
+      color: var(--muted);
+      font-weight: 500;
+      line-height: 1.35;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .song-right {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 6px;
+      flex-shrink: 0;
+    }
+
+    .song-duration {
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--muted);
+      font-family: "Cascadia Code", "Consolas", "SF Mono", monospace;
+      letter-spacing: 0;
+    }
+
+    .song-tag {
+      font-size: 10px;
+      font-weight: 800;
+      padding: 3px 8px;
+      border-radius: 999px;
+      background: var(--pay-bg);
+      border: 1px solid rgba(217, 154, 43, 0.35);
+      color: var(--pay);
+      letter-spacing: 0.5px;
+    }
+
+    .song-tag.free {
+      background: var(--soft);
+      border: 1px solid var(--line);
+      color: var(--nm-deep);
+    }
+
+    .tips {
+      margin-top: 12px;
+      padding: 12px 14px;
+      border-radius: 16px;
+      background:
+        radial-gradient(circle at 100% 0%, rgba(236,65,65,0.12), transparent 50%),
+        linear-gradient(160deg, #fdf0f0, #fbe4e4);
+      border: 1px solid var(--line);
+    }
+
+    .tips-title {
+      font-size: 12px;
+      font-weight: 800;
+      color: var(--nm-deep);
+      margin-bottom: 6px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .tips-title span {
+      display: inline-flex;
+      width: 18px;
+      height: 18px;
+      border-radius: 6px;
+      background: var(--nm);
+      color: #fff;
+      font-size: 11px;
+      align-items: center;
+      justify-content: center;
+      font-weight: 800;
+    }
+
+    .tips-body {
+      font-size: 11.5px;
+      color: var(--muted);
+      line-height: 1.55;
+      font-weight: 500;
+      word-break: break-all;
+    }
+
+    .footer {
+      margin-top: 12px;
+      padding: 4px 6px 2px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .footer-left {
+      font-size: 10.5px;
+      color: var(--muted);
+      font-weight: 600;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 380px;
+    }
+
+    .footer-right {
+      font-size: 10.5px;
+      color: var(--nm-deep);
+      font-weight: 700;
+      opacity: 0.9;
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <div class="card">
+      <div class="hero">
+        <div class="hero-top">
+          <div class="brand-mark">♪</div>
+          <div class="hero-text">
+            <div class="eyebrow">NCM SEARCH</div>
+            <div class="title">{{data.keyword || '点歌结果'}}</div>
+            <div class="subtitle">网易云音乐 · 发送 #ncm听序号 播放</div>
+          </div>
+          <div class="version-pill">{{data.total || 0}} 首</div>
+        </div>
+        <div class="hero-stats">
+          <div class="stat">
+            <div class="stat-num">{{data.total || 0}}</div>
+            <div class="stat-label">命中</div>
+          </div>
+          <div class="stat">
+            <div class="stat-num">{{data.quality || 'AUTO'}}</div>
+            <div class="stat-label">最高音质</div>
+          </div>
+          <div class="stat">
+            <div class="stat-num">#ncm听N</div>
+            <div class="stat-label">选曲指令</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="body">
+        <div class="section">
+          <div class="section-head">
+            <div class="section-dot"></div>
+            <div class="section-title">搜索结果</div>
+            <div class="section-tag">{{data.total || 0}} 首</div>
+          </div>
+          <div class="song-list">
+            {{each data.songs song}}
+            <div class="song">
+              <div class="song-idx">{{song.index}}</div>
+              {{if song.cover}}
+              <img class="song-cover" src="{{song.cover}}" referrerpolicy="no-referrer" />
+              {{else}}
+              <div class="song-cover ph">♪</div>
+              {{/if}}
+              <div class="song-main">
+                <div class="song-name">{{song.songName}}</div>
+                <div class="song-singer">{{song.singerName}}{{song.albumName ? '  ·  ' + song.albumName : ''}}</div>
+              </div>
+              <div class="song-right">
+                {{if song.duration}}<div class="song-duration">{{song.duration}}</div>{{else}}<div class="song-duration"></div>{{/if}}
+                <div class="song-tag {{song.payplay ? '' : 'free'}}">{{song.payplay ? '付费' : '免费'}}</div>
+              </div>
+            </div>
+            {{/each}}
+          </div>
+        </div>
+
+        <div class="section">
+          <div class="section-head">
+            <div class="section-dot"></div>
+            <div class="section-title">常用指令</div>
+            <div class="section-tag">快捷</div>
+          </div>
+          <div class="cmd-list">
+            <div class="cmd">
+              <div class="cmd-main">
+                <div class="cmd-name">#ncm听序号</div>
+                <div class="cmd-desc">播放当前列表中的指定歌曲</div>
+              </div>
+              <div class="cmd-example">#ncm听1</div>
+            </div>
+            <div class="cmd">
+              <div class="cmd-main">
+                <div class="cmd-name">#ncm播放 关键词</div>
+                <div class="cmd-desc">搜索并直接播放第一首</div>
+              </div>
+              <div class="cmd-example">#ncm播放 晴天</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="tips">
+          <div class="tips-title"><span>!</span>小提示</div>
+          <div class="tips-body">{{data.tip || '发送 #ncm听序号 播放（会话内也可 #听序号）；列表约 10 分钟内有效。'}}</div>
+        </div>
+
+        <div class="footer">
+          <div class="footer-left">{{data.apiHint || 'API 已对接'}}</div>
+          <div class="footer-right">astrbot_plugin_neteasemusic</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

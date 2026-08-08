@@ -1,0 +1,27 @@
+{
+  "defaultCookie": { "type": "string", "default": "", "description": "网易云登录 Cookie（MUSIC_U=... 等）。可手动粘贴，或由 #ncm登录 扫码自动写入，后写覆盖先写。留空则走 API 端 NETEASE_COOKIE 环境变量。", "hint": "从浏览器已登录的网易云页面复制：F12 → Network → 任一请求 → 请求头 Cookie 整段粘贴。注意：此处明文存储，请留意 WebUI 面板访问权限。" },
+  "defaultUid": { "type": "string", "default": "", "invisible": true, "description": "扫码登录后自动写入的账号 UID；手填 cookie 时留空即可，首次用到会自动反查补全" },
+  "apiBase": { "type": "string", "description": "网易云 API 地址（api-enhanced 服务，如 http://127.0.0.1:3000）", "default": "" },
+  "enable": { "type": "bool", "description": "插件总开关", "default": true },
+  "enableSongRequest": { "type": "bool", "description": "点歌功能开关", "default": true },
+  "enableResolve": { "type": "bool", "description": "网易云链接自动解析开关", "default": true },
+  "resolveLinks": { "type": "bool", "description": "自动解析 music.163.com / 163music.com 链接", "default": true },
+  "maxList": { "type": "int", "description": "点歌列表最大显示条数（1-20）", "default": 10 },
+  "quality": { "type": "string", "description": "最高播放音质", "default": "auto",
+    "options": ["auto", "jymaster", "sky", "jyeffect", "hires", "lossless", "exhigh", "higher", "standard"],
+    "labels": ["auto 自动适配最高可用", "jymaster 超清母带", "sky 沉浸环绕声", "jyeffect 高清环绕声", "hires Hi-Res", "lossless 无损 FLAC", "exhigh 极高", "higher 较高", "standard 标准"],
+    "hint": "auto 自动匹配歌曲最高可用音质并逐级降级；其余为指定最高档位。也可用指令 #ncm音质 <档位> 修改。"
+  },
+  "qualityUnblock": { "type": "bool", "description": "VIP/灰歌自动解灰兜底（unblock=true，音质可能降为源站可用音质）", "default": true },
+  "sendVocal": { "type": "bool", "description": "以语音消息方式发送音频", "default": true },
+  "uploadFile": { "type": "bool", "description": "以群/好友文件方式发送音频", "default": true },
+  "tempDir": { "type": "string", "description": "音频临时下载目录（相对插件目录）", "default": "temp/neteasemusic" },
+  "downloadTimeout": { "type": "int", "description": "音频下载超时（毫秒）", "default": 90000 },
+  "keepFileSec": { "type": "int", "description": "临时文件保留秒数（0 表示立即删除）", "default": 60 },
+  "identifyPrefix": { "type": "string", "description": "识别提示前缀", "default": "识别：" },
+  "qrLoginEnable": { "type": "bool", "description": "允许使用 #ncm登录 扫码登录命令", "default": true },
+  "qqofficialAdapt": { "type": "bool", "description": "QQ 官方机器人专用适配：合并消息以规避被动回复额度、语音(silk)发送失败自动回退文件、跳过不支持的原生卡片", "default": true },
+  "renderListCard": { "type": "bool", "description": "将点歌/列表结果渲染为图片卡片（关闭则纯文本）", "default": true },
+  "sendNativeCard": { "type": "bool", "description": "发送 OneBot 原生音乐卡片（type=163，仅 aiocqhttp 等支持 send_api 的协议；QQ 官方机器人自动跳过）", "default": false },
+  "sendTextInfo": { "type": "bool", "description": "发送音频时附带歌曲信息文案", "default": true }
+}

@@ -1,0 +1,19 @@
+name: astrbot_plugin_neteasemusic
+display_name: "网易云音乐点歌/解析插件"
+short_desc: 网易云点歌、排行榜、歌词、评论、扫码登录
+desc: |
+  基于 api-enhanced（NeteaseCloudMusicApiEnhanced）的 AstrBot 网易云音乐插件。
+  支持点歌、播放、歌词/逐字歌词、热搜、排行榜、歌手/专辑/歌单/评论、相似推荐、
+  相关歌单、新歌速递、精品歌单、搜索建议、banner、歌单分类、MV、电台、歌手榜、
+  新碟/新碟榜、热门歌手、歌单榜、日推、来首歌、收藏、听歌排行、历史日推、
+  签到、云盘、最近播放、红心、扫码登录、音质自适配与解灰、语音/文件发送、
+  网易云链接自动解析。
+  需配合 API 服务使用。
+version: v1.0.0
+author: wbndm
+repo: https://github.com/wbndmqaq/astrbot_plugin_neteasemusic
+astrbot_version: ">=4.16,<5"
+support_platforms:
+  - aiocqhttp
+  - qq_official
+

@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>网易云音乐 · 登录状态</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    :root {
+      --nm: #ec4141;
+      --nm-deep: #c62f2f;
+      --text: #3d2424;
+      --muted: #8a6b6b;
+      --line: rgba(236, 65, 65, 0.15);
+      --soft: #fdeeee;
+      --chip: rgba(236, 65, 65, 0.08);
+    }
+
+    html, body {
+      width: fit-content;
+      height: fit-content;
+      min-width: 0;
+      min-height: 0;
+      margin: 0;
+      padding: 0;
+      background: #fdeeee !important;
+      font-family: "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Noto Sans SC", sans-serif;
+      color: var(--text);
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+      text-rendering: geometricPrecision;
+    }
+
+    .page {
+      display: block;
+      width: fit-content;
+      margin: 0;
+      padding: 16px;
+      background: #fdeeee;
+    }
+
+    .card {
+      width: 560px;
+      border-radius: 28px;
+      overflow: hidden;
+      position: relative;
+      isolation: isolate;
+      background: linear-gradient(165deg, #fdf7f7 0%, #fdf0f0 42%, #fbe8e8 100%);
+      border: 1px solid rgba(236, 65, 65, 0.18);
+      box-shadow:
+        0 1px 0 rgba(255, 255, 255, 0.85) inset,
+        0 14px 28px rgba(120, 30, 30, 0.12);
+    }
+
+    .hero {
+      padding: 26px 24px 22px;
+      border-radius: 28px 28px 0 0;
+      overflow: hidden;
+      position: relative;
+      color: #fff;
+      background:
+        radial-gradient(circle at 88% 18%, rgba(255,255,255,0.28) 0%, transparent 42%),
+        radial-gradient(circle at 12% 90%, rgba(0,0,0,0.08) 0%, transparent 45%),
+        linear-gradient(135deg, #f0605a 0%, #ec4141 50%, #d63333 100%);
+    }
+
+    .hero-top {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 14px;
+    }
+
+    .brand-mark {
+      width: 48px;
+      height: 48px;
+      border-radius: 16px;
+      background: rgba(255,255,255,0.2);
+      border: 1px solid rgba(255,255,255,0.35);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 24px;
+      font-weight: 800;
+      box-shadow: 0 8px 18px rgba(0,0,0,0.12);
+      flex-shrink: 0;
+    }
+
+    .hero-text { flex: 1; min-width: 0; }
+
+    .eyebrow {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 2.6px;
+      opacity: 0.86;
+      text-transform: uppercase;
+    }
+
+    .title {
+      margin-top: 6px;
+      font-size: 26px;
+      font-weight: 800;
+      line-height: 1.2;
+      text-shadow: 0 2px 10px rgba(0,0,0,0.1);
+    }
+
+    .subtitle {
+      margin-top: 6px;
+      font-size: 13px;
+      font-weight: 500;
+      opacity: 0.9;
+    }
+
+    .version-pill {
+      flex-shrink: 0;
+      padding: 6px 12px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.18);
+      border: 1px solid rgba(255,255,255,0.3);
+      font-size: 11px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .hero-stats {
+      margin-top: 18px;
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+    }
+
+    .stat {
+      padding: 10px 10px 9px;
+      border-radius: 14px;
+      background: rgba(255,255,255,0.14);
+      border: 1px solid rgba(255,255,255,0.22);
+      text-align: center;
+    }
+
+    .stat-num {
+      font-size: 18px;
+      font-weight: 800;
+      line-height: 1.1;
+    }
+
+    .stat-label {
+      margin-top: 3px;
+      font-size: 11px;
+      opacity: 0.88;
+      font-weight: 600;
+    }
+
+    .body { padding: 18px 18px 16px; }
+
+    .user-card {
+      display: flex;
+      gap: 16px;
+      align-items: center;
+      padding: 16px;
+      border-radius: 20px;
+      background: linear-gradient(165deg, #ffffff 0%, #fdf6f6 100%);
+      border: 1px solid var(--line);
+      box-shadow: 0 4px 12px rgba(120, 30, 30, 0.05);
+    }
+
+    .avatar {
+      width: 72px;
+      height: 72px;
+      border-radius: 50%;
+      object-fit: cover;
+      display: block;
+      background: linear-gradient(135deg, #f2b9b5, #e8918b);
+      color: #fff;
+      font-size: 30px;
+      font-weight: 800;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+
+    .user-main { flex: 1; min-width: 0; }
+
+    .user-name {
+      font-size: 20px;
+      font-weight: 800;
+      line-height: 1.3;
+    }
+
+    .user-sub {
+      margin-top: 4px;
+      font-size: 12.5px;
+      color: var(--muted);
+      font-weight: 500;
+    }
+
+    .user-pill {
+      flex-shrink: 0;
+      padding: 6px 12px;
+      border-radius: 999px;
+      background: var(--chip);
+      border: 1px solid var(--line);
+      color: var(--nm-deep);
+      font-size: 11px;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+
+    .meta-grid {
+      margin-top: 12px;
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+    }
+
+    .meta {
+      padding: 10px 10px 9px;
+      border-radius: 14px;
+      background: linear-gradient(165deg, #ffffff 0%, #fdf6f6 100%);
+      border: 1px solid var(--line);
+      text-align: center;
+    }
+
+    .meta-num {
+      font-size: 14px;
+      font-weight: 800;
+      color: var(--nm-deep);
+      line-height: 1.2;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .meta-label {
+      margin-top: 3px;
+      font-size: 11px;
+      color: var(--muted);
+      font-weight: 600;
+    }
+
+    .tips {
+      margin-top: 12px;
+      padding: 12px 14px;
+      border-radius: 16px;
+      background:
+        radial-gradient(circle at 100% 0%, rgba(236,65,65,0.12), transparent 50%),
+        linear-gradient(160deg, #fdf0f0, #fbe4e4);
+      border: 1px solid var(--line);
+    }
+
+    .tips-title {
+      font-size: 12px;
+      font-weight: 800;
+      color: var(--nm-deep);
+      margin-bottom: 6px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .tips-title span {
+      display: inline-flex;
+      width: 18px;
+      height: 18px;
+      border-radius: 6px;
+      background: var(--nm);
+      color: #fff;
+      font-size: 11px;
+      align-items: center;
+      justify-content: center;
+      font-weight: 800;
+    }
+
+    .tips-body {
+      font-size: 11.5px;
+      color: var(--muted);
+      line-height: 1.55;
+      font-weight: 500;
+    }
+
+    .footer {
+      margin-top: 12px;
+      padding: 4px 6px 2px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .footer-left {
+      font-size: 10.5px;
+      color: var(--muted);
+      font-weight: 600;
+      max-width: 380px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .footer-right {
+      font-size: 10.5px;
+      color: var(--nm-deep);
+      font-weight: 700;
+      opacity: 0.9;
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <div class="card">
+      <div class="hero">
+        <div class="hero-top">
+          <div class="brand-mark">♪</div>
+          <div class="hero-text">
+            <div class="eyebrow">NCM ACCOUNT</div>
+            <div class="title">{{data.title || '网易云音乐 · 登录状态'}}</div>
+            <div class="subtitle">网易云音乐账号状态</div>
+          </div>
+          <div class="version-pill">{{data.badge}}</div>
+        </div>
+        <div class="hero-stats">
+          <div class="stat">
+            <div class="stat-num">{{data.loggedIn ? '已登录' : '未登录'}}</div>
+            <div class="stat-label">状态</div>
+          </div>
+          <div class="stat">
+            <div class="stat-num">{{data.quality || 'AUTO'}}</div>
+            <div class="stat-label">音质</div>
+          </div>
+          <div class="stat">
+            <div class="stat-num">#ncm</div>
+            <div class="stat-label">前缀</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="body">
+        <div class="user-card">
+          {{if data.avatar}}
+          <img class="avatar" src="{{data.avatar}}" referrerpolicy="no-referrer" />
+          {{else}}
+          <div class="avatar" style="display:flex;">{{data.avatarPh}}</div>
+          {{/if}}
+          <div class="user-main">
+            <div class="user-name">{{data.nickname || '未登录'}}</div>
+            <div class="user-sub">{{data.uin ? 'UID ' + data.uin : '发送 #ncm登录 扫码登录'}}{{data.level ? ' · Lv.' + data.level : ''}}</div>
+          </div>
+          <div class="user-pill">{{data.loggedIn ? '在线' : '离线'}}</div>
+        </div>
+
+        <div class="meta-grid">
+          <div class="meta">
+            <div class="meta-num">{{data.apiBase || '未配置'}}</div>
+            <div class="meta-label">API</div>
+          </div>
+          <div class="meta">
+            <div class="meta-num">{{data.keyStatus || '-'}}</div>
+            <div class="meta-label">Cookie</div>
+          </div>
+          <div class="meta">
+            <div class="meta-num">{{data.quality || 'AUTO'}}</div>
+            <div class="meta-label">音质</div>
+          </div>
+        </div>
+
+        <div class="tips">
+          <div class="tips-title"><span>!</span>{{data.loggedIn ? '已登录' : '未登录'}}</div>
+          <div class="tips-body">{{data.tip || '发送 #ncm登录 扫码登录；#ncm音质 <档位> 修改音质'}}</div>
+        </div>
+
+        <div class="footer">
+          <div class="footer-left">{{data.apiBase || 'API 已对接'}}</div>
+          <div class="footer-right">astrbot_plugin_neteasemusic</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
