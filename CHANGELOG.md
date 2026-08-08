@@ -1,6 +1,14 @@
 # 更新日志
 
 
+## [v1.0.1] - 2026-08-08
+
+社区入口更新。
+
+### 🆕 新增
+
+- README 新增 📮 用户群板块，提供 QQ 群一键加入入口
+
 ## [v1.0.0] - 2026-08-08
 
 首个正式版本。基于 [api-enhanced](https://github.com/neteasecloudmusicapienhanced/api-enhanced)（NeteaseCloudMusicApiEnhanced）HTTP API 重构，镜像 qqmusic 插件架构，提供完整的网易云点歌 / 解析 / 账号能力。
