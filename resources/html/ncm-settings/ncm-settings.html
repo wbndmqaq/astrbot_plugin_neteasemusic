@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>网易云音乐 · 登录状态</title>
+  <title>网易云音乐 · 插件设置</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -139,9 +139,12 @@
     }
 
     .stat-num {
-      font-size: 18px;
+      font-size: 16px;
       font-weight: 800;
       line-height: 1.1;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
 
     .stat-label {
@@ -153,92 +156,36 @@
 
     .body { padding: 18px 18px 16px; }
 
-    .user-card {
-      display: flex;
-      gap: 16px;
-      align-items: center;
-      padding: 16px;
-      border-radius: 20px;
-      background: linear-gradient(165deg, #ffffff 0%, #fdf6f6 100%);
-      border: 1px solid var(--line);
-      box-shadow: 0 4px 12px rgba(120, 30, 30, 0.05);
+    .section {
+      margin-bottom: 12px;
     }
 
-    .avatar {
-      width: 72px;
-      height: 72px;
-      border-radius: 50%;
-      object-fit: cover;
-      display: block;
-      background: linear-gradient(135deg, #f2b9b5, #e8918b);
-      color: #fff;
-      font-size: 30px;
-      font-weight: 800;
-      align-items: center;
-      justify-content: center;
-      flex-shrink: 0;
-    }
-
-    .user-main { flex: 1; min-width: 0; }
-
-    .user-name-row {
+    .section-title {
       display: flex;
       align-items: center;
       gap: 8px;
-      flex-wrap: wrap;
-    }
-
-    .user-name {
-      font-size: 20px;
+      font-size: 12px;
       font-weight: 800;
-      line-height: 1.3;
-    }
-
-    .vip-badge {
-      flex-shrink: 0;
-      padding: 3px 10px;
-      border-radius: 999px;
-      font-size: 10.5px;
-      font-weight: 800;
-      background: linear-gradient(135deg, #f0605a, #ec4141);
-      color: #fff;
-      box-shadow: 0 2px 8px rgba(236, 65, 65, 0.35);
-    }
-
-    .vip-badge.black {
-      background: linear-gradient(135deg, #f7d794, #e8b64c 55%, #d49a2f);
-      color: #5a3d00;
-      box-shadow: 0 2px 8px rgba(200, 150, 40, 0.35);
-    }
-
-    .user-sub {
-      margin-top: 4px;
-      font-size: 12.5px;
-      color: var(--muted);
-      font-weight: 500;
-    }
-
-    .user-pill {
-      flex-shrink: 0;
-      padding: 6px 12px;
-      border-radius: 999px;
-      background: var(--chip);
-      border: 1px solid var(--line);
       color: var(--nm-deep);
-      font-size: 11px;
-      font-weight: 800;
-      white-space: nowrap;
+      margin-bottom: 10px;
+    }
+
+    .section-title::before {
+      content: '';
+      width: 4px;
+      height: 14px;
+      border-radius: 2px;
+      background: var(--nm);
     }
 
     .meta-grid {
-      margin-top: 12px;
       display: grid;
       grid-template-columns: repeat(3, 1fr);
       gap: 8px;
     }
 
     .meta {
-      padding: 10px 10px 9px;
+      padding: 12px 10px 11px;
       border-radius: 14px;
       background: linear-gradient(165deg, #ffffff 0%, #fdf6f6 100%);
       border: 1px solid var(--line);
@@ -246,20 +193,113 @@
     }
 
     .meta-num {
-      font-size: 14px;
+      font-size: 13.5px;
       font-weight: 800;
       color: var(--nm-deep);
-      line-height: 1.2;
+      line-height: 1.25;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
     }
 
     .meta-label {
-      margin-top: 3px;
+      margin-top: 4px;
       font-size: 11px;
       color: var(--muted);
       font-weight: 600;
+    }
+
+    .toggle-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 8px;
+    }
+
+    .toggle {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 11px 14px;
+      border-radius: 14px;
+      background: linear-gradient(165deg, #ffffff 0%, #fdf6f6 100%);
+      border: 1px solid var(--line);
+    }
+
+    .toggle-name {
+      font-size: 13px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .pill {
+      flex-shrink: 0;
+      padding: 3px 12px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 800;
+    }
+
+    .pill.on {
+      background: var(--nm);
+      color: #fff;
+      box-shadow: 0 2px 8px rgba(236, 65, 65, 0.35);
+    }
+
+    .pill.off {
+      background: #f0e6e6;
+      color: #b99a9a;
+    }
+
+    .quality-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 13px 16px;
+      border-radius: 16px;
+      background:
+        radial-gradient(circle at 100% 0%, rgba(236,65,65,0.12), transparent 50%),
+        linear-gradient(160deg, #fdf0f0, #fbe4e4);
+      border: 1px solid var(--line);
+    }
+
+    .quality-label {
+      font-size: 12.5px;
+      color: var(--muted);
+      font-weight: 600;
+    }
+
+    .quality-value {
+      font-size: 16px;
+      font-weight: 800;
+      color: var(--nm-deep);
+    }
+
+    .login-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 13px 16px;
+      border-radius: 16px;
+      background: linear-gradient(165deg, #ffffff 0%, #fdf6f6 100%);
+      border: 1px solid var(--line);
+    }
+
+    .login-label {
+      font-size: 12.5px;
+      color: var(--muted);
+      font-weight: 600;
+    }
+
+    .login-value {
+      font-size: 13.5px;
+      font-weight: 800;
+      color: var(--nm-deep);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
 
     .tips {
@@ -295,11 +335,36 @@
       font-weight: 800;
     }
 
-    .tips-body {
-      font-size: 11.5px;
+    .cmd-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin-top: 8px;
+    }
+
+    .cmd {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 8px 12px;
+      border-radius: 12px;
+      background: #fff;
+      border: 1px solid var(--line);
+    }
+
+    .cmd-name {
+      font-size: 12.5px;
+      font-weight: 800;
+      color: var(--text);
+      font-family: Consolas, "Courier New", monospace;
+    }
+
+    .cmd-desc {
+      font-size: 11px;
       color: var(--muted);
-      line-height: 1.55;
-      font-weight: 500;
+      font-weight: 600;
+      white-space: nowrap;
     }
 
     .footer {
@@ -334,67 +399,82 @@
     <div class="card">
       <div class="hero">
         <div class="hero-top">
-          <div class="brand-mark">♪</div>
+          <div class="brand-mark">⚙</div>
           <div class="hero-text">
-            <div class="eyebrow">NCM ACCOUNT</div>
-            <div class="title">{{data.title || '网易云音乐 · 登录状态'}}</div>
-            <div class="subtitle">网易云音乐账号状态</div>
+            <div class="eyebrow">NCM SETTINGS</div>
+            <div class="title">{{data.title || '网易云音乐 · 插件设置'}}</div>
+            <div class="subtitle">配置即时生效，无需重启</div>
           </div>
-          <div class="version-pill">{{data.badge}}</div>
+          <div class="version-pill">{{data.loginStatus ? '已配置' : '未登录'}}</div>
         </div>
         <div class="hero-stats">
-          <div class="stat">
-            <div class="stat-num">{{data.loggedIn ? '已登录' : '未登录'}}</div>
-            <div class="stat-label">状态</div>
-          </div>
           <div class="stat">
             <div class="stat-num">{{data.quality || 'AUTO'}}</div>
             <div class="stat-label">音质</div>
           </div>
           <div class="stat">
-            <div class="stat-num">#ncm</div>
-            <div class="stat-label">前缀</div>
+            <div class="stat-num">{{data.maxList || 10}}</div>
+            <div class="stat-label">列表上限</div>
+          </div>
+          <div class="stat">
+            <div class="stat-num">{{data.apiHint || 'API 未配置'}}</div>
+            <div class="stat-label">API</div>
           </div>
         </div>
       </div>
 
       <div class="body">
-        <div class="user-card">
-          {{if data.avatar}}
-          <img class="avatar" src="{{data.avatar}}" referrerpolicy="no-referrer" />
-          {{else}}
-          <div class="avatar" style="display:flex;">{{data.avatarPh}}</div>
-          {{/if}}
-          <div class="user-main">
-            <div class="user-name-row">
-              <div class="user-name">{{data.nickname || '未登录'}}</div>
-              {{if data.vipLabel}}
-              <div class="vip-badge {{data.vipGold ? 'black' : ''}}">{{data.vipLabel}}{{data.vipLevel ? ' Lv.' + data.vipLevel : ''}}</div>
-              {{/if}}
+        <div class="section">
+          <div class="section-title">基础设置</div>
+          <div class="meta-grid">
+            <div class="meta">
+              <div class="meta-num">{{data.apiBase || '未配置'}}</div>
+              <div class="meta-label">API 地址</div>
             </div>
-            <div class="user-sub">{{data.uin ? 'UID ' + data.uin : '发送 #ncm登录 扫码登录'}}{{data.level ? ' · Lv.' + data.level : ''}}</div>
+            <div class="meta">
+              <div class="meta-num">{{data.cookieStatus || '-'}}</div>
+              <div class="meta-label">默认 Cookie</div>
+            </div>
+            <div class="meta">
+              <div class="meta-num">{{data.loginStatus || '未登录'}}</div>
+              <div class="meta-label">登录</div>
+            </div>
           </div>
-          <div class="user-pill">{{data.loggedIn ? '在线' : '离线'}}</div>
         </div>
 
-        <div class="meta-grid">
-          <div class="meta">
-            <div class="meta-num">{{data.apiBase || '未配置'}}</div>
-            <div class="meta-label">API</div>
+        <div class="section">
+          <div class="section-title">功能开关</div>
+          <div class="toggle-grid">
+            {{each data.toggles t}}
+            <div class="toggle">
+              <span class="toggle-name">{{t.name}}</span>
+              {{if t.on}}
+              <span class="pill on">开</span>
+              {{else}}
+              <span class="pill off">关</span>
+              {{/if}}
+            </div>
+            {{/each}}
           </div>
-          <div class="meta">
-            <div class="meta-num">{{data.keyStatus || '-'}}</div>
-            <div class="meta-label">Cookie</div>
-          </div>
-          <div class="meta">
-            <div class="meta-num">{{data.quality || 'AUTO'}}</div>
-            <div class="meta-label">音质</div>
+        </div>
+
+        <div class="section">
+          <div class="quality-bar">
+            <span class="quality-label">当前音质</span>
+            <span class="quality-value">{{data.quality || 'AUTO'}}</span>
           </div>
         </div>
 
         <div class="tips">
-          <div class="tips-title"><span>!</span>{{data.loggedIn ? '已登录' : '未登录'}}</div>
-          <div class="tips-body">{{data.tip || '发送 #ncm登录 扫码登录；#ncm音质 <档位> 修改音质'}}</div>
+          <div class="tips-title"><span>!</span>可修改</div>
+          <div class="cmd-list">
+            {{each data.commands c}}
+            <div class="cmd">
+              <span class="cmd-name">{{c.cmd}}</span>
+              <span class="cmd-desc">{{c.desc}}</span>
+            </div>
+            {{/each}}
+          </div>
         </div>
 
         <div class="footer">

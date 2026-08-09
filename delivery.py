@@ -14,14 +14,23 @@ from .quality import QUALITY_LABEL
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
 
-def _is_qqofficial(event) -> bool:
+def _platform_name(event) -> str:
     try:
         name = event.get_platform_name()
         if not name:
-            return False
-        return "qq_official" in str(name)
+            return ""
+        return str(name)
     except Exception:
-        return False
+        return ""
+
+
+def _is_qqofficial(event) -> bool:
+    return "qq_official" in _platform_name(event)
+
+
+def _is_weixin_oc(event) -> bool:
+
+    return "weixin_oc" in _platform_name(event)
 
 
 def get_temp_dir(cfg: dict, plugin_dir: str) -> str:
@@ -44,7 +53,9 @@ def _clean_track_text(s: str, max_len: int = 40) -> str:
     return re.sub(r'[\\/:*?"<>|]', "", s).strip()
 
 
-def build_music_filename(*, singer: str, title: str, quality: str = "", ext: str = "", include_quality: bool = False) -> str:
+def build_music_filename(
+    *, singer: str, title: str, quality: str = "", ext: str = "", include_quality: bool = False
+) -> str:
     s = _clean_track_text(singer, 30)
     t = _clean_track_text(title, 40)
     base = f"{s}-{t}" if (s and t) else (s or t or "NeteaseMusic")
@@ -64,7 +75,9 @@ def _ext_for_quality(quality_hint: str, url: str) -> str:
     return ".mp3"
 
 
-async def download_audio(url: str, save_dir: str, filename: str = "neteasemusic", timeout_ms: int = 90000, quality_hint: str = "") -> dict:
+async def download_audio(
+    url: str, save_dir: str, filename: str = "neteasemusic", timeout_ms: int = 90000, quality_hint: str = ""
+) -> dict:
     headers = {
         "User-Agent": UA,
         "Referer": "https://music.163.com/",
@@ -77,7 +90,10 @@ async def download_audio(url: str, save_dir: str, filename: str = "neteasemusic"
     file_path = os.path.join(save_dir, f"{safe_name}_{int(time.time() * 1000)}{ext}")
 
     timeout = aiohttp.ClientTimeout(total=timeout_ms / 1000)
-    async with aiohttp.ClientSession(timeout=timeout) as sess, sess.get(url, headers=headers, allow_redirects=True) as res:
+    async with (
+        aiohttp.ClientSession(timeout=timeout) as sess,
+        sess.get(url, headers=headers, allow_redirects=True) as res,
+    ):
         if res.status >= 400:
             raise RuntimeError(f"下载失败 HTTP {res.status}")
         data = await res.read()
@@ -129,12 +145,19 @@ async def send_native_music_card(event, music_id: str) -> bool:
         return False
 
 
-async def deliver_song(plugin, event, song: dict, play: dict, *, cfg: dict, plugin_dir: str, options: dict | None = None) -> dict:
+async def deliver_song(
+    plugin, event, song: dict, play: dict, *, cfg: dict, plugin_dir: str, options: dict | None = None
+) -> dict:
     options = options or {}
     title = song.get("name") or "未知歌曲"
     singer = song.get("artist") or "未知歌手"
 
-    quality_label = play.get("qualityLabel") or QUALITY_LABEL.get(play.get("level", ""), play.get("level") or "") or cfg.get("quality") or ""
+    quality_label = (
+        play.get("qualityLabel")
+        or QUALITY_LABEL.get(play.get("level", ""), play.get("level") or "")
+        or cfg.get("quality")
+        or ""
+    )
     if play.get("unblocked"):
         quality_label = f"{quality_label}（解灰）" if quality_label else "解灰音源"
 
@@ -142,9 +165,10 @@ async def deliver_song(plugin, event, song: dict, play: dict, *, cfg: dict, plug
     skip_native = options.get("skipNativeCard", False)
 
     is_qqoff = _is_qqofficial(event) and cfg.get("qqofficialAdapt", True) is not False
+    is_wxoc = _is_weixin_oc(event)
 
     # QQ 官方无 OneBot send_api，原生音乐卡本是 no-op，显式跳过避免误导
-    allow_native = (not skip_native) and cfg.get("sendNativeCard") and not is_qqoff
+    allow_native = (not skip_native) and cfg.get("sendNativeCard") and not is_qqoff and not is_wxoc
 
     # 文案：非 QQ 官方直接发；QQ 官方下延后，与首个媒体合并以省被动回复额度
     pending_text = ""
@@ -175,7 +199,9 @@ async def deliver_song(plugin, event, song: dict, play: dict, *, cfg: dict, plug
     try:
         save_dir = get_temp_dir(cfg, plugin_dir)
         timeout = int(cfg.get("downloadTimeout") or 90000)
-        dl = await download_audio(play["url"], save_dir, "neteasemusic", timeout, play.get("level") or cfg.get("quality") or "")
+        dl = await download_audio(
+            play["url"], save_dir, "neteasemusic", timeout, play.get("level") or cfg.get("quality") or ""
+        )
         local_path = dl["filePath"]
     except Exception as err:
         await plugin._send_chain(event, plugin._plain(f"下载音频失败：{err}\n可尝试 #ncm登录 后重发，或换一首歌"))
@@ -184,8 +210,15 @@ async def deliver_song(plugin, event, song: dict, play: dict, *, cfg: dict, plug
     keep_sec = int(cfg.get("keepFileSec", 60))
     want_vocal = bool(cfg.get("sendVocal"))
     want_file = bool(cfg.get("uploadFile"))
+    # 个人微信（weixin_oc）出站不支持 Record 语音（adapter 的 send_by_session 只收
+    # Plain/Image/Video/File，Record 会被静默跳过）→ 语音自动降级为文件发送
+    if is_wxoc:
+        want_vocal = False
+        want_file = want_file or bool(cfg.get("sendVocal"))
     ext = os.path.splitext(local_path)[1] or ".mp3"
-    file_display = build_music_filename(singer=singer, title=title, quality=play.get("level") or cfg.get("quality") or "", ext=ext)
+    file_display = build_music_filename(
+        singer=singer, title=title, quality=play.get("level") or cfg.get("quality") or "", ext=ext
+    )
     # QQ 官方 /files 上传 base64 后体积约 +33%，无损 FLAC(~30MB)必然 413，且会被
     # _qqofficial_retry 重试 5 次(约 30s)后放弃并留下裸 markdown 触发 40034011。
     # 文件分量走原始路径不做转码，故按大小/后缀守卫：超限直接跳过文件上传，保留语音(silk)。

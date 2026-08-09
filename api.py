@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+import time
 from typing import Any
 
 import aiohttp
@@ -24,7 +26,7 @@ def _cfg() -> dict:
     return {}
 
 
-def _get_cookie(user_key: str) -> str:
+def _get_cookie() -> str:
     try:
         return str(_cfg().get("defaultCookie") or "")
     except Exception:
@@ -40,7 +42,9 @@ ERR_MESSAGES = {
     403: "请求被风控拒绝（403），可尝试给 API 服务配置 realIP 或随机中国 IP",
     404: "资源不存在或无版权",
     406: "需要登录，请先发送 #ncm登录",
+    460: "IP 被风控（460 cheating），请给 API 服务配置 realIP 或 randomCNIP",
     502: "网易接口调用失败，请稍后重试",
+    503: "请求过于频繁，请稍后再试",
     1101: "登录已过期，请重新 #ncm登录",
 }
 
@@ -106,7 +110,7 @@ async def request(pathname: str, params: dict | None = None, method: str = "get"
     if "://" not in base:
         raise ApiError(f"API 地址格式错误（缺少 http:// 协议头）：{base}")
     url = f"{base}{pathname if pathname.startswith('/') else '/' + pathname}"
-    cookie = _get_cookie(user_key)
+    cookie = _get_cookie()
     if cookie:
         params["cookie"] = cookie
 
@@ -224,11 +228,53 @@ def _normalize_playlist(item: dict, idx: int = 0) -> dict | None:
     }
 
 
+# ──────────── 短链展开（163cn.tv → music.163.com） ────────────
+
+
+SHORT_LINK_RE = re.compile(r"https?://[\w.-]*\.?163cn\.tv/\S+")
+
+
+async def expand_short_links(text: str) -> str:
+
+    links = SHORT_LINK_RE.findall(str(text or ""))
+    if not links:
+        return text
+    out = text
+    for link in links:
+        final_url = await _follow_redirect(link)
+        if final_url:
+            out = out.replace(link, final_url)
+    return out
+
+
+async def _follow_redirect(url: str) -> str:
+    try:
+        timeout = aiohttp.ClientTimeout(total=8)
+        async with (
+            aiohttp.ClientSession(timeout=timeout) as sess,
+            sess.get(
+                url,
+                allow_redirects=True,
+                headers={
+                    "User-Agent": (
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                    )
+                },
+            ) as res,
+        ):
+            return str(res.url)
+    except Exception:
+        return ""
+
+
 # ──────────── 搜索 ────────────
 
 
 async def search(keyword: str, type_: int = 1, limit: int = 10, offset: int = 0, user_key: str = "") -> list:
-    body = await request("/cloudsearch", {"keywords": keyword, "type": type_, "limit": limit, "offset": offset}, "get", user_key)
+    body = await request(
+        "/cloudsearch", {"keywords": keyword, "type": type_, "limit": limit, "offset": offset}, "get", user_key
+    )
     songs = (((body or {}).get("result") or {}).get("songs")) or []
     out = []
     for i, s in enumerate(songs):
@@ -245,12 +291,14 @@ async def search_artists(keyword: str, limit: int = 5, user_key: str = "") -> li
     for i, a in enumerate(artists):
         if not isinstance(a, dict):
             continue
-        out.append({
-            "index": i + 1,
-            "id": a.get("id") or 0,
-            "name": a.get("name") or "",
-            "cover": a.get("img1v1Url") or "",
-        })
+        out.append(
+            {
+                "index": i + 1,
+                "id": a.get("id") or 0,
+                "name": a.get("name") or "",
+                "cover": a.get("img1v1Url") or "",
+            }
+        )
     return out
 
 
@@ -262,13 +310,15 @@ async def search_albums(keyword: str, limit: int = 5, user_key: str = "") -> lis
         if not isinstance(a, dict):
             continue
         artist = a.get("artist") if isinstance(a.get("artist"), dict) else {}
-        out.append({
-            "index": i + 1,
-            "id": a.get("id") or 0,
-            "name": a.get("name") or "",
-            "cover": a.get("picUrl") or "",
-            "artist": artist.get("name") or "",
-        })
+        out.append(
+            {
+                "index": i + 1,
+                "id": a.get("id") or 0,
+                "name": a.get("name") or "",
+                "cover": a.get("picUrl") or "",
+                "artist": artist.get("name") or "",
+            }
+        )
     return out
 
 
@@ -287,7 +337,7 @@ async def search_suggest(keyword: str, user_key: str = "") -> list:
     body = await request("/search/suggest", {"keywords": keyword}, "get", user_key)
     result = (body or {}).get("result") or {}
     out = []
-    for m in (result.get("allMatch") or []):
+    for m in result.get("allMatch") or []:
         if isinstance(m, dict) and m.get("keyword"):
             out.append(m["keyword"])
     if not out:
@@ -304,12 +354,14 @@ async def hot_search(user_key: str = "") -> list:
     for i, h in enumerate(data[:15]):
         if not isinstance(h, dict):
             continue
-        out.append({
-            "index": i + 1,
-            "word": h.get("searchWord") or "",
-            "score": int(_num(h.get("score"))),
-            "content": h.get("content") or "",
-        })
+        out.append(
+            {
+                "index": i + 1,
+                "word": h.get("searchWord") or "",
+                "score": int(_num(h.get("score"))),
+                "content": h.get("content") or "",
+            }
+        )
     return out
 
 
@@ -333,8 +385,8 @@ async def song_url_v1(song_id, level: str = "lossless", *, unblock: bool = False
     }
 
 
-async def song_url_best(song_id, level: str = "auto", *, user_key: str = "", fallback: bool = True, unblock_fallback: bool = True) -> dict:
-    levels = quality_candidates(level, fallback)
+async def song_url_best(song_id, level: str = "auto", *, user_key: str = "", unblock_fallback: bool = True) -> dict:
+    levels = quality_candidates(level)
     last_err = None
     for lv in levels:
         try:
@@ -387,12 +439,17 @@ async def simi_songs(song_id, limit: int = 10, user_key: str = "") -> list:
     return out
 
 
-async def related_playlists(song_id, limit: int = 10, user_key: str = "") -> list:
-    body = await request("/related/playlist", {"id": song_id, "limit": limit}, "get", user_key)
-    pls = (body or {}).get("playlists") or []
+async def related_playlists(playlist_id, limit: int = 10, user_key: str = "") -> list:
+    # 旧 /related/playlist 已废弃（html 抓取，返回空），改用 /playlist/detail/rcmd/get。
+    # 实测（2026-08）：参数必须是「歌单 id」（传歌曲 id 会 502/空），仅部分歌单有相关推荐。
+    body = await request("/playlist/detail/rcmd/get", {"id": playlist_id}, "get", user_key)
+    data = (body or {}).get("data") or {}
+    recs = data.get("recPlaylist") or []
     out = []
-    for i, p in enumerate(pls[:limit]):
-        norm = _normalize_playlist(p, i)
+    for i, rec in enumerate(recs[:limit]):
+        if not isinstance(rec, dict):
+            continue
+        norm = _normalize_playlist(rec.get("playlist"), i)
         if norm:
             out.append(norm)
     return out
@@ -416,8 +473,7 @@ def _normalize_comment(item: dict, idx: int = 0, hot: bool = False) -> dict | No
     }
 
 
-async def comment(song_id, limit: int = 20, user_key: str = "") -> list:
-    body = await request("/comment/music", {"id": song_id, "limit": limit}, "get", user_key)
+def _comments_from_body(body: dict) -> list:
     out = []
     hot = (body or {}).get("hotComments") or []
     normal = (body or {}).get("comments") or []
@@ -430,6 +486,15 @@ async def comment(song_id, limit: int = 20, user_key: str = "") -> list:
         if norm:
             out.append(norm)
     return out
+
+
+async def _comments_for(pathname: str, res_id, limit: int = 20, user_key: str = "") -> list:
+    body = await request(pathname, {"id": res_id, "limit": limit}, "get", user_key)
+    return _comments_from_body(body)
+
+
+async def comment(song_id, limit: int = 20, user_key: str = "") -> list:
+    return await _comments_for("/comment/music", song_id, limit, user_key)
 
 
 # ──────────── 歌单 / 榜单 ────────────
@@ -469,22 +534,24 @@ async def toplist(user_key: str = "") -> list:
     for i, t in enumerate(lst):
         if not isinstance(t, dict):
             continue
-        out.append({
-            "index": i + 1,
-            "id": t.get("id"),
-            "name": t.get("name") or "",
-            "updateFrequency": t.get("updateFrequency") or "",
-            "cover": t.get("coverImgUrl") or "",
-        })
+        out.append(
+            {
+                "index": i + 1,
+                "id": t.get("id"),
+                "name": t.get("name") or "",
+                "updateFrequency": t.get("updateFrequency") or "",
+                "cover": t.get("coverImgUrl") or "",
+            }
+        )
     return out
 
 
 async def top_detail(chart_id, limit: int = 60, user_key: str = "") -> list:
-    body = await request("/top/list", {"id": chart_id}, "get", user_key)
-    pl = (body or {}).get("playlist") or {}
-    tracks = (pl.get("tracks") if isinstance(pl, dict) else None) or []
+    # 旧 /top/list 已废弃（v3.34.0 后不支持 idx）；榜单本质是歌单，用 track/all 拉全量
+    body = await request("/playlist/track/all", {"id": chart_id, "limit": limit, "offset": 0}, "get", user_key)
+    songs = (body or {}).get("songs") or []
     out = []
-    for i, s in enumerate(tracks[:limit]):
+    for i, s in enumerate(songs):
         norm = _normalize_song(s, i)
         if norm:
             out.append(norm)
@@ -523,10 +590,12 @@ async def playlist_cats(user_key: str = "") -> list:
     for s in subs:
         if not isinstance(s, dict) or not s.get("name"):
             continue
-        out.append({
-            "name": s.get("name"),
-            "count": int(_num(s.get("count"))),
-        })
+        out.append(
+            {
+                "name": s.get("name"),
+                "count": int(_num(s.get("count"))),
+            }
+        )
     return out
 
 
@@ -537,13 +606,15 @@ async def banner(user_key: str = "") -> list:
     for i, b in enumerate(banners[:10]):
         if not isinstance(b, dict):
             continue
-        out.append({
-            "index": i + 1,
-            "title": b.get("title") or b.get("typeTitle") or "",
-            "typeTitle": b.get("typeTitle") or "",
-            "url": b.get("url") or "",
-            "image": b.get("imageUrl") or b.get("pic") or "",
-        })
+        out.append(
+            {
+                "index": i + 1,
+                "title": b.get("title") or b.get("typeTitle") or "",
+                "typeTitle": b.get("typeTitle") or "",
+                "url": b.get("url") or "",
+                "image": b.get("imageUrl") or b.get("pic") or "",
+            }
+        )
     return out
 
 
@@ -661,8 +732,14 @@ async def album_detail(album_id, user_key: str = "") -> tuple[dict | None, list]
 # ──────────── 登录 ────────────
 
 
+def _now_ts() -> int:
+    # api-enhanced 对相同 URL 缓存 2 分钟（server.js apicache，无 login 豁免）；
+    # 二维码三接口必须带实时时间戳才能绕过缓存，否则轮询永远拿到第一次的结果
+    return int(time.time() * 1000)
+
+
 async def qr_key(user_key: str = "") -> str:
-    body = await request("/login/qr/key", {"timestamp": 0}, "get", user_key)
+    body = await request("/login/qr/key", {"timestamp": _now_ts()}, "get", user_key)
     return (((body or {}).get("data") or {}).get("unikey")) or ""
 
 
@@ -676,12 +753,17 @@ async def qr_create(key: str, user_key: str = "") -> dict:
 
 
 async def qr_check(key: str, user_key: str = "") -> dict:
-
-    return await request("/login/qr/check", {"key": key}, "get", user_key)
+    # 时间戳防缓存（见 _now_ts 注释）；轮询频率 2s，缓存会直接卡死状态更新
+    return await request("/login/qr/check", {"key": key, "timestamp": _now_ts()}, "get", user_key)
 
 
 async def logout(user_key: str = "") -> dict:
     return await request("/logout", {}, "get", user_key)
+
+
+async def vip_info(user_key: str = "") -> dict:
+
+    return await request("/vip/info", {}, "get", user_key)
 
 
 async def login_status(user_key: str = "") -> dict:
@@ -714,20 +796,22 @@ async def user_cloud(limit: int = 30, user_key: str = "") -> list:
         artist = s.get("artist") or ""
         if isinstance(artist, list):
             artist = " / ".join(a.get("name") or "" for a in artist if isinstance(a, dict))
-        out.append({
-            "index": i + 1,
-            "id": s.get("songId") or s.get("id") or 0,
-            "name": s.get("songName") or s.get("name") or "",
-            "artist": str(artist),
-            "album": s.get("album") or "",
-            "cover": s.get("cover") or s.get("albumPic") or "",
-            "duration": _duration_text(_num(s.get("songTime") or s.get("duration"))),
-            "dtMs": int(_num(s.get("songTime") or s.get("duration"))),
-            "fee": 0,
-            "payplay": False,
-            "trial": False,
-            "mvid": 0,
-        })
+        out.append(
+            {
+                "index": i + 1,
+                "id": s.get("songId") or s.get("id") or 0,
+                "name": s.get("songName") or s.get("name") or "",
+                "artist": str(artist),
+                "album": s.get("album") or "",
+                "cover": s.get("cover") or s.get("albumPic") or "",
+                "duration": _duration_text(_num(s.get("songTime") or s.get("duration"))),
+                "dtMs": int(_num(s.get("songTime") or s.get("duration"))),
+                "fee": 0,
+                "payplay": False,
+                "trial": False,
+                "mvid": 0,
+            }
+        )
     return out
 
 
@@ -739,10 +823,13 @@ async def record_recent_song(limit: int = 30, user_key: str = "") -> list:
     for i, item in enumerate(lst):
         if not isinstance(item, dict):
             continue
-        s = item.get("resource") if isinstance(item.get("resource"), dict) else None
-        norm = _normalize_song(s, i) if s else None
+        # 实测（2026-08）：歌曲信息在 item.data（完整 song 对象，含 name/id/ar/al），
+        # item.resource 字段已不存在；resourceId 为歌曲 id
+        s = item.get("data") if isinstance(item.get("data"), dict) else item.get("resource")
+        norm = _normalize_song(s, i) if isinstance(s, dict) else None
         if norm:
-            norm["playCount"] = int(_num(item.get("playCount")))
+            # playTime 为最近播放时间戳（ms），可展示"X天前播放"
+            norm["playTime"] = int(_num(item.get("playTime")))
             out.append(norm)
     return out
 
@@ -750,13 +837,21 @@ async def record_recent_song(limit: int = 30, user_key: str = "") -> list:
 async def history_recommend_songs(user_key: str = "") -> list:
 
     body = await request("/history/recommend/songs", {}, "get", user_key)
-    lst = (body or {}).get("data") or []
+    data = (body or {}).get("data") or {}
+    # 实测（2026-08）：data 为 dict——dates 是可用日期列表（黑胶VIP 近 5 次），
+    # songs 通常为 None；实际歌曲需再调 detail?date=YYYY-MM-DD 获取
+    if not isinstance(data, dict):
+        return []
+    songs = data.get("songs") or []
+    if not songs:
+        dates = data.get("dates") or []
+        if not dates:
+            return []
+        body2 = await request("/history/recommend/songs/detail", {"date": dates[0]}, "get", user_key)
+        songs = ((body2 or {}).get("data") or {}).get("songs") or []
     out = []
-    for i, item in enumerate(lst):
-        if not isinstance(item, dict):
-            continue
-        s = item.get("song") if isinstance(item.get("song"), dict) else None
-        norm = _normalize_song(s, i) if s else None
+    for i, s in enumerate(songs):
+        norm = _normalize_song(s, i)
         if norm:
             out.append(norm)
     return out
@@ -803,15 +898,17 @@ async def search_mv(keyword: str, limit: int = 5, user_key: str = "") -> list:
     for i, m in enumerate(mvs):
         if not isinstance(m, dict):
             continue
-        out.append({
-            "index": i + 1,
-            "id": m.get("id") or 0,
-            "name": m.get("name") or "",
-            "artist": m.get("artistName") or "",
-            "cover": m.get("cover") or "",
-            "duration": _duration_text(_num(m.get("duration"))),
-            "playCount": int(_num(m.get("playCount"))),
-        })
+        out.append(
+            {
+                "index": i + 1,
+                "id": m.get("id") or 0,
+                "name": m.get("name") or "",
+                "artist": m.get("artistName") or "",
+                "cover": m.get("cover") or "",
+                "duration": _duration_text(_num(m.get("duration"))),
+                "playCount": int(_num(m.get("playCount"))),
+            }
+        )
     return out
 
 
@@ -864,12 +961,14 @@ async def toplist_artist(user_key: str = "") -> list:
     for i, a in enumerate(lst[:20]):
         if not isinstance(a, dict):
             continue
-        out.append({
-            "index": i + 1,
-            "id": a.get("id") or 0,
-            "name": a.get("name") or "",
-            "cover": a.get("img1v1Url") or "",
-        })
+        out.append(
+            {
+                "index": i + 1,
+                "id": a.get("id") or 0,
+                "name": a.get("name") or "",
+                "cover": a.get("img1v1Url") or "",
+            }
+        )
     return out
 
 
@@ -882,15 +981,17 @@ async def album_newest(limit: int = 10, user_key: str = "") -> list:
         if not isinstance(a, dict):
             continue
         artist = a.get("artist") if isinstance(a.get("artist"), dict) else {}
-        out.append({
-            "index": i + 1,
-            "id": a.get("id") or 0,
-            "name": a.get("name") or "",
-            "cover": a.get("picUrl") or "",
-            "artist": artist.get("name") or a.get("artistName") or "",
-            "publishTime": int(_num(a.get("publishTime"))),
-            "size": int(_num(a.get("size"))),
-        })
+        out.append(
+            {
+                "index": i + 1,
+                "id": a.get("id") or 0,
+                "name": a.get("name") or "",
+                "cover": a.get("picUrl") or "",
+                "artist": artist.get("name") or a.get("artistName") or "",
+                "publishTime": int(_num(a.get("publishTime"))),
+                "size": int(_num(a.get("size"))),
+            }
+        )
     return out
 
 
@@ -901,12 +1002,14 @@ async def top_artists(limit: int = 20, user_key: str = "") -> list:
     for i, a in enumerate(artists[:limit]):
         if not isinstance(a, dict):
             continue
-        out.append({
-            "index": i + 1,
-            "id": a.get("id") or 0,
-            "name": a.get("name") or "",
-            "cover": a.get("img1v1Url") or "",
-        })
+        out.append(
+            {
+                "index": i + 1,
+                "id": a.get("id") or 0,
+                "name": a.get("name") or "",
+                "cover": a.get("img1v1Url") or "",
+            }
+        )
     return out
 
 
@@ -919,14 +1022,16 @@ async def top_album(area: str = "ALL", limit: int = 10, user_key: str = "") -> l
         if not isinstance(a, dict):
             continue
         artist = a.get("artist") if isinstance(a.get("artist"), dict) else {}
-        out.append({
-            "index": i + 1,
-            "id": a.get("id") or 0,
-            "name": a.get("name") or "",
-            "cover": a.get("picUrl") or a.get("cover") or "",
-            "artist": artist.get("name") or a.get("artistName") or "",
-            "publishTime": int(_num(a.get("publishTime"))),
-        })
+        out.append(
+            {
+                "index": i + 1,
+                "id": a.get("id") or 0,
+                "name": a.get("name") or "",
+                "cover": a.get("picUrl") or a.get("cover") or "",
+                "artist": artist.get("name") or a.get("artistName") or "",
+                "publishTime": int(_num(a.get("publishTime"))),
+            }
+        )
     return out
 
 
@@ -937,15 +1042,17 @@ async def top_mv(limit: int = 10, user_key: str = "") -> list:
     for i, m in enumerate(data[:limit]):
         if not isinstance(m, dict):
             continue
-        out.append({
-            "index": i + 1,
-            "id": m.get("id") or 0,
-            "name": m.get("name") or "",
-            "artist": m.get("artistName") or "",
-            "cover": m.get("cover") or "",
-            "duration": _duration_text(_num(m.get("duration"))),
-            "playCount": int(_num(m.get("playCount"))),
-        })
+        out.append(
+            {
+                "index": i + 1,
+                "id": m.get("id") or 0,
+                "name": m.get("name") or "",
+                "artist": m.get("artistName") or "",
+                "cover": m.get("cover") or "",
+                "duration": _duration_text(_num(m.get("duration"))),
+                "playCount": int(_num(m.get("playCount"))),
+            }
+        )
     return out
 
 
@@ -957,14 +1064,16 @@ async def dj_recommend(limit: int = 10, user_key: str = "") -> list:
     for i, d in enumerate(data[:limit]):
         if not isinstance(d, dict):
             continue
-        out.append({
-            "index": i + 1,
-            "id": d.get("id") or 0,
-            "name": d.get("name") or "",
-            "cover": d.get("picUrl") or "",
-            "desc": str(d.get("rcmdtext") or d.get("desc") or "")[:100],
-            "subCount": int(_num(d.get("subCount"))),
-        })
+        out.append(
+            {
+                "index": i + 1,
+                "id": d.get("id") or 0,
+                "name": d.get("name") or "",
+                "cover": d.get("picUrl") or "",
+                "desc": str(d.get("rcmdtext") or d.get("desc") or "")[:100],
+                "subCount": int(_num(d.get("subCount"))),
+            }
+        )
     return out
 
 
@@ -988,15 +1097,17 @@ async def playlist_hot_tags(user_key: str = "") -> list:
         if not isinstance(t, dict):
             continue
         tag = t.get("playlistTag") if isinstance(t.get("playlistTag"), dict) else t
-        out.append({
-            "index": i + 1,
-            "name": tag.get("name") or "",
-            "usedCount": int(_num(tag.get("usedCount") or t.get("usedCount"))),
-        })
+        out.append(
+            {
+                "index": i + 1,
+                "name": tag.get("name") or "",
+                "usedCount": int(_num(tag.get("usedCount") or t.get("usedCount"))),
+            }
+        )
     return out
 
 
-# ──────────── 逐字歌词 / 精准匹配 / 评论扩展 ────────────
+# ──────────── 逐字歌词 / 评论扩展 ────────────
 
 
 async def lyric_new(song_id, user_key: str = "") -> dict:
@@ -1007,46 +1118,9 @@ async def lyric_new(song_id, user_key: str = "") -> dict:
     return {"lrc": lrc, "yrc": yrc}
 
 
-async def search_match(title: str, user_key: str = "") -> dict | None:
-
-    body = await request("/search/match", {"title": title, "album": "", "artist": ""}, "get", user_key)
-    result = (body or {}).get("result") or {}
-    song = result.get("song")
-    if isinstance(song, dict):
-        return _normalize_song(song)
-    songs = result.get("songs") or []
-    if songs and isinstance(songs[0], dict):
-        return _normalize_song(songs[0])
-    return None
-
-
 async def comment_playlist(playlist_id, limit: int = 20, user_key: str = "") -> list:
-    body = await request("/comment/playlist", {"id": playlist_id, "limit": limit}, "get", user_key)
-    out = []
-    hot = (body or {}).get("hotComments") or []
-    normal = (body or {}).get("comments") or []
-    for i, c in enumerate(hot):
-        norm = _normalize_comment(c, i, hot=True)
-        if norm:
-            out.append(norm)
-    for i, c in enumerate(normal):
-        norm = _normalize_comment(c, len(hot) + i, hot=False)
-        if norm:
-            out.append(norm)
-    return out
+    return await _comments_for("/comment/playlist", playlist_id, limit, user_key)
 
 
 async def comment_album(album_id, limit: int = 20, user_key: str = "") -> list:
-    body = await request("/comment/album", {"id": album_id, "limit": limit}, "get", user_key)
-    out = []
-    hot = (body or {}).get("hotComments") or []
-    normal = (body or {}).get("comments") or []
-    for i, c in enumerate(hot):
-        norm = _normalize_comment(c, i, hot=True)
-        if norm:
-            out.append(norm)
-    for i, c in enumerate(normal):
-        norm = _normalize_comment(c, len(hot) + i, hot=False)
-        if norm:
-            out.append(norm)
-    return out
+    return await _comments_for("/comment/album", album_id, limit, user_key)

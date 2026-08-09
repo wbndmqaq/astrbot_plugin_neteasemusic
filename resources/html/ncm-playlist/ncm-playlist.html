@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>网易云音乐 · 登录状态</title>
+  <title>网易云音乐 · 歌单列表</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -103,6 +103,9 @@
       font-weight: 800;
       line-height: 1.2;
       text-shadow: 0 2px 10px rgba(0,0,0,0.1);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
 
     .subtitle {
@@ -139,9 +142,12 @@
     }
 
     .stat-num {
-      font-size: 18px;
+      font-size: 16px;
       font-weight: 800;
       line-height: 1.1;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
 
     .stat-label {
@@ -153,113 +159,122 @@
 
     .body { padding: 18px 18px 16px; }
 
-    .user-card {
+    .section-head {
       display: flex;
-      gap: 16px;
       align-items: center;
-      padding: 16px;
-      border-radius: 20px;
-      background: linear-gradient(165deg, #ffffff 0%, #fdf6f6 100%);
-      border: 1px solid var(--line);
-      box-shadow: 0 4px 12px rgba(120, 30, 30, 0.05);
+      gap: 8px;
+      margin-bottom: 10px;
     }
 
-    .avatar {
-      width: 72px;
-      height: 72px;
-      border-radius: 50%;
-      object-fit: cover;
-      display: block;
-      background: linear-gradient(135deg, #f2b9b5, #e8918b);
-      color: #fff;
-      font-size: 30px;
+    .section-dot {
+      width: 4px;
+      height: 14px;
+      border-radius: 2px;
+      background: var(--nm);
+    }
+
+    .section-title {
+      font-size: 13px;
       font-weight: 800;
+      color: var(--nm-deep);
+      flex: 1;
+    }
+
+    .section-tag {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--muted);
+    }
+
+    .pl-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .pl {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 12px;
+      border-radius: 16px;
+      background: linear-gradient(165deg, #ffffff 0%, #fdf6f6 100%);
+      border: 1px solid var(--line);
+    }
+
+    .pl-idx {
+      width: 26px;
+      height: 26px;
+      border-radius: 9px;
+      background: var(--chip);
+      color: var(--nm-deep);
+      font-size: 12px;
+      font-weight: 800;
+      display: flex;
       align-items: center;
       justify-content: center;
       flex-shrink: 0;
     }
 
-    .user-main { flex: 1; min-width: 0; }
+    .pl-cover {
+      width: 44px;
+      height: 44px;
+      border-radius: 10px;
+      object-fit: cover;
+      display: block;
+      flex-shrink: 0;
+      background: linear-gradient(135deg, #f2b9b5, #e8918b);
+    }
 
-    .user-name-row {
+    .pl-cover.ph {
+      color: #fff;
+      font-size: 18px;
+      font-weight: 800;
       display: flex;
       align-items: center;
-      gap: 8px;
-      flex-wrap: wrap;
+      justify-content: center;
     }
 
-    .user-name {
-      font-size: 20px;
-      font-weight: 800;
-      line-height: 1.3;
+    .pl-main {
+      flex: 1;
+      min-width: 0;
     }
 
-    .vip-badge {
-      flex-shrink: 0;
-      padding: 3px 10px;
-      border-radius: 999px;
-      font-size: 10.5px;
-      font-weight: 800;
-      background: linear-gradient(135deg, #f0605a, #ec4141);
-      color: #fff;
-      box-shadow: 0 2px 8px rgba(236, 65, 65, 0.35);
-    }
-
-    .vip-badge.black {
-      background: linear-gradient(135deg, #f7d794, #e8b64c 55%, #d49a2f);
-      color: #5a3d00;
-      box-shadow: 0 2px 8px rgba(200, 150, 40, 0.35);
-    }
-
-    .user-sub {
-      margin-top: 4px;
-      font-size: 12.5px;
-      color: var(--muted);
-      font-weight: 500;
-    }
-
-    .user-pill {
-      flex-shrink: 0;
-      padding: 6px 12px;
-      border-radius: 999px;
-      background: var(--chip);
-      border: 1px solid var(--line);
-      color: var(--nm-deep);
-      font-size: 11px;
-      font-weight: 800;
-      white-space: nowrap;
-    }
-
-    .meta-grid {
-      margin-top: 12px;
-      display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: 8px;
-    }
-
-    .meta {
-      padding: 10px 10px 9px;
-      border-radius: 14px;
-      background: linear-gradient(165deg, #ffffff 0%, #fdf6f6 100%);
-      border: 1px solid var(--line);
-      text-align: center;
-    }
-
-    .meta-num {
+    .pl-name {
       font-size: 14px;
       font-weight: 800;
-      color: var(--nm-deep);
-      line-height: 1.2;
+      line-height: 1.3;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
     }
 
-    .meta-label {
+    .pl-sub {
       margin-top: 3px;
-      font-size: 11px;
+      font-size: 11.5px;
       color: var(--muted);
-      font-weight: 600;
+      font-weight: 500;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .pl-right {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-shrink: 0;
+    }
+
+    .pl-pill {
+      padding: 4px 10px;
+      border-radius: 999px;
+      background: var(--chip);
+      border: 1px solid var(--line);
+      color: var(--nm-deep);
+      font-size: 10.5px;
+      font-weight: 800;
+      white-space: nowrap;
     }
 
     .tips {
@@ -336,69 +351,61 @@
         <div class="hero-top">
           <div class="brand-mark">♪</div>
           <div class="hero-text">
-            <div class="eyebrow">NCM ACCOUNT</div>
-            <div class="title">{{data.title || '网易云音乐 · 登录状态'}}</div>
-            <div class="subtitle">网易云音乐账号状态</div>
+            <div class="eyebrow">NCM PLAYLISTS</div>
+            <div class="title">{{data.title || '歌单列表'}}</div>
+            <div class="subtitle">{{data.subtitle || '网易云音乐歌单'}}</div>
           </div>
-          <div class="version-pill">{{data.badge}}</div>
+          <div class="version-pill">{{data.total || 0}} 个</div>
         </div>
         <div class="hero-stats">
           <div class="stat">
-            <div class="stat-num">{{data.loggedIn ? '已登录' : '未登录'}}</div>
-            <div class="stat-label">状态</div>
+            <div class="stat-num">{{data.total || 0}}</div>
+            <div class="stat-label">歌单数</div>
           </div>
           <div class="stat">
-            <div class="stat-num">{{data.quality || 'AUTO'}}</div>
-            <div class="stat-label">音质</div>
+            <div class="stat-num">{{data.totalPlay || '0'}}</div>
+            <div class="stat-label">累计播放</div>
           </div>
           <div class="stat">
-            <div class="stat-num">#ncm</div>
-            <div class="stat-label">前缀</div>
+            <div class="stat-num">#ncm歌单</div>
+            <div class="stat-label">查看曲目</div>
           </div>
         </div>
       </div>
 
       <div class="body">
-        <div class="user-card">
-          {{if data.avatar}}
-          <img class="avatar" src="{{data.avatar}}" referrerpolicy="no-referrer" />
-          {{else}}
-          <div class="avatar" style="display:flex;">{{data.avatarPh}}</div>
-          {{/if}}
-          <div class="user-main">
-            <div class="user-name-row">
-              <div class="user-name">{{data.nickname || '未登录'}}</div>
-              {{if data.vipLabel}}
-              <div class="vip-badge {{data.vipGold ? 'black' : ''}}">{{data.vipLabel}}{{data.vipLevel ? ' Lv.' + data.vipLevel : ''}}</div>
-              {{/if}}
-            </div>
-            <div class="user-sub">{{data.uin ? 'UID ' + data.uin : '发送 #ncm登录 扫码登录'}}{{data.level ? ' · Lv.' + data.level : ''}}</div>
-          </div>
-          <div class="user-pill">{{data.loggedIn ? '在线' : '离线'}}</div>
+        <div class="section-head">
+          <div class="section-dot"></div>
+          <div class="section-title">歌单列表</div>
+          <div class="section-tag">{{data.total || 0}} 个</div>
         </div>
-
-        <div class="meta-grid">
-          <div class="meta">
-            <div class="meta-num">{{data.apiBase || '未配置'}}</div>
-            <div class="meta-label">API</div>
+        <div class="pl-list">
+          {{each data.items pl}}
+          <div class="pl">
+            <div class="pl-idx">{{pl.index}}</div>
+            {{if pl.cover}}
+            <img class="pl-cover" src="{{pl.cover}}" referrerpolicy="no-referrer" />
+            {{else}}
+            <div class="pl-cover ph">♪</div>
+            {{/if}}
+            <div class="pl-main">
+              <div class="pl-name">{{pl.name}}</div>
+              <div class="pl-sub">{{pl.creator || '未知创建者'}}{{pl.trackCount ? '  ·  ' + pl.trackCount + '首' : ''}}</div>
+            </div>
+            <div class="pl-right">
+              <div class="pl-pill">{{pl.playCountText || '0播放'}}</div>
+            </div>
           </div>
-          <div class="meta">
-            <div class="meta-num">{{data.keyStatus || '-'}}</div>
-            <div class="meta-label">Cookie</div>
-          </div>
-          <div class="meta">
-            <div class="meta-num">{{data.quality || 'AUTO'}}</div>
-            <div class="meta-label">音质</div>
-          </div>
+          {{/each}}
         </div>
 
         <div class="tips">
-          <div class="tips-title"><span>!</span>{{data.loggedIn ? '已登录' : '未登录'}}</div>
-          <div class="tips-body">{{data.tip || '发送 #ncm登录 扫码登录；#ncm音质 <档位> 修改音质'}}</div>
+          <div class="tips-title"><span>!</span>{{data.tipTitle || '提示'}}</div>
+          <div class="tips-body">{{data.tip || '发送 #ncm歌单 歌单名 查看曲目'}}</div>
         </div>
 
         <div class="footer">
-          <div class="footer-left">{{data.apiBase || 'API 已对接'}}</div>
+          <div class="footer-left">{{data.apiHint || 'API 已对接'}}</div>
           <div class="footer-right">astrbot_plugin_neteasemusic</div>
         </div>
       </div>

@@ -29,12 +29,10 @@ QUALITY_LABEL = {"auto": "自动适配"}
 QUALITY_LABEL.update({item["value"]: item["label"] for item in NCM_QUALITY_LIST if item["value"] != "auto"})
 
 
-def quality_candidates(preferred: str = "auto", fallback: bool = True) -> list[str]:
+def quality_candidates(preferred: str = "auto") -> list[str]:
 
     q = (preferred or "auto").lower()
     if q in ("auto", "adaptive", "best"):
-        return list(QUALITY_LADDER[QUALITY_LADDER.index("lossless"):]) if fallback else ["lossless"]
+        return list(QUALITY_LADDER[QUALITY_LADDER.index("lossless") :])
     idx = QUALITY_LADDER.index(q) if q in QUALITY_LADDER else QUALITY_LADDER.index("lossless")
-    if not fallback:
-        return [QUALITY_LADDER[idx]]
     return QUALITY_LADDER[idx:]
