@@ -9,7 +9,7 @@ desc: |
   签到、云盘、最近播放、红心、扫码登录、音质自适配与解灰、语音/文件发送、
   网易云链接自动解析。
   需配合 API 服务使用。
-version: v1.1.0
+version: v1.1.1
 author: wbndm
 repo: https://github.com/wbndmqaq/astrbot_plugin_neteasemusic
 astrbot_version: ">=4.16,<5"

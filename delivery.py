@@ -181,7 +181,11 @@ async def deliver_song(
             "" if play.get("url") else "⚠ 未获取到播放链，请 #ncm登录",
         ]
         pending_text = "\n".join(x for x in lines if x)
-        if not is_qqoff:
+        # weixin_oc 适配器不支持 Plain+媒体合并（send_by_session 每段拆成独立消息），
+        # 独立文案显得多余--文件名已含歌手-歌名-音质，详情卡片也已含歌曲信息
+        if is_wxoc:
+            pending_text = ""
+        elif not is_qqoff:
             await plugin._send_chain(event, plugin._plain(pending_text))
             pending_text = ""
 
