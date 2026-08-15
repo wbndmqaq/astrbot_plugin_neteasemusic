@@ -17,7 +17,7 @@
 - **点歌播放**：关键词搜索 → 列表卡片 → `#ncm听N` 选歌，或 `#ncm播放` 直接播第一首
 - **音质自适配**：`auto` 自动匹配歌曲最高可用音质并逐级降级；VIP/灰歌自动解灰兜底
 - **音频投递**：语音（silk 转码）+ 群/好友文件双通道，互不阻塞，失败自动回退
-- **多平台适配**：QQ 官方（合并消息规避额度、大文件守卫、纯文本兜底）、个人微信 weixin_oc（语音自动降级为文件）、Telegram / 钉钉 / 飞书 / KOOK / Discord 原生支持语音与文件
+- **多平台适配**：QQ 官方（合并消息规避额度、大文件分片上传、ffmpeg 压缩兜底、纯文本兜底）、个人微信 weixin_oc（语音自动降级为文件）、Telegram / 钉钉 / 飞书 / KOOK / Discord 原生支持语音与文件
 - **卡片渲染**：7 套网易云红主题 HTML 卡片（列表/详情/歌词/热搜/评论/帮助/状态），自动裁剪白边
 - **链接自动解析**：发送 `music.163.com` / `163music.com` 分享卡片或链接，自动识别歌曲/歌单/专辑并播放
 - **扫码登录**：`#ncm登录` 生成二维码，轮询自动写入 Cookie，支持多账号（按会话隔离）
@@ -70,9 +70,12 @@ WebUI → 插件管理 → 本插件 → 设置面板。也可用指令热改部
 | `tempDir` | string | `temp/neteasemusic` | 临时下载目录（相对插件目录） |
 | `downloadTimeout` | int | `90000` | 音频下载超时（毫秒） |
 | `keepFileSec` | int | `60` | 临时文件保留秒数（`0` 表示发出后立即删除，作用于音频+卡片图） |
+| `ffmpegCompress` | bool | `true` | 大文件/FLAC 无法作为文件发送时（QQ 官方无分片上传/发送失败），用 ffmpeg 压成紧凑 mp3 兜底发送 |
+| `compressBitrate` | int | `128` | 压缩兜底 mp3 码率（kbps） |
 | `identifyPrefix` | string | `识别：` | 识别提示前缀 |
 | `qrLoginEnable` | bool | `true` | 允许 `#ncm登录` 扫码登录 |
 | `qqofficialAdapt` | bool | `true` | QQ 官方机器人专用适配（合并消息/语音回退文件/跳过原生卡片） |
+| `qqofficialChunkedUpload` | bool | `true` | QQ 官方大文件分片上传（需 AstrBot ≥ 4.27.3）：FLAC/>10MB 文件以分片方式发送；关闭则保留旧守卫（大文件仅发语音） |
 | `renderListCard` | bool | `true` | 列表/搜索结果渲染为图片卡片（关闭则纯文本） |
 | `sendNativeCard` | bool | `false` | OneBot 原生音乐卡片（type=163，仅 aiocqhttp；QQ 官方自动跳过） |
 | `sendTextInfo` | bool | `true` | 发送音频时附带歌曲信息文案 |
@@ -183,7 +186,7 @@ WebUI → 插件管理 → 本插件 → 设置面板。也可用指令热改部
 QQ 官方机器人接口与 OneBot 差异较大，插件做了专项适配：
 
 - **合并消息**：文案与首个媒体合并发送，规避被动回复额度限制
-- **大文件守卫**：QQ 官方 `/files` 上传 base64 后体积约 +33%，无损 FLAC（~30MB）必触发 `413`。插件按大小（>10MB）或后缀（`.flac`）自动跳过文件上传，仅发语音（silk）版本
+- **大文件分片上传**：AstrBot ≥ 4.27.3 的 QQ 官方适配器对本地 >10MB 文件自动走分片上传，无损 FLAC 也可作为文件发送（`qqofficialChunkedUpload` 开关，默认开）。旧版 AstrBot 或关闭该开关时保留守卫：按大小（>10MB）或后缀（`.flac`）拦截文件上传——此时开启 `ffmpegCompress`（默认开）会用 ffmpeg 压成紧凑 mp3 发送；ffmpeg 缺失/压缩失败才退回仅发语音（silk）
 - **纯文本兜底**：媒体发送失败时，文本走 `msg_type=0` 纯文本，规避 `40034011 无效 markdown` 报错
 - **原生卡片跳过**：QQ 官方无 OneBot `send_api`，原生音乐卡片自动跳过
 
@@ -260,7 +263,7 @@ A：部分接口（日推、喜欢、云盘、听歌排行等）需登录。发�
 A：确认 `qualityUnblock`（默认开）启用，且 API 服务端 `ENABLE_GENERAL_UNBLOCK=true`（默认开）。解灰可能将音质降为源站可用音质。
 
 **Q：QQ 官方机器人发不出音频文件？**
-A：QQ 官方接口对大文件/FLAC 限制严格，插件会自动跳过文件改发语音。如需文件，请降低音质档位（如 `exhigh`/`standard`）或改用 aiocqhttp 协议端。
+A：AstrBot ≥ 4.27.3 起 QQ 官方适配器支持大文件分片上传（`qqofficialChunkedUpload` 默认开），FLAC/>10MB 也可正常发送。若分片不可用或仍发送失败，开启 `ffmpegCompress`（默认开）会用 ffmpeg 压成紧凑 mp3 兜底——请确认本机已安装 ffmpeg。
 
 **Q：卡片不显示图片/渲染失败？**
 A：卡片由本地 Playwright 渲染。确认已安装 `playwright` 依赖并执行过 `playwright install chromium`；如无法渲染，可关闭 `renderListCard` 退回纯文本。
@@ -287,3 +290,11 @@ QQ 群：[点击加入](https://qm.qq.com/q/8sOZdZTnaw)
 ## 📄 许可
 
 本项目仅供学习交流使用。所有音乐版权归属网易云音乐及相应权利人，使用本插件产生的任何后果由使用者自行承担。
+
+---
+
+<div align="center">
+
+如果觉得这个插件对你有帮助，欢迎 Star 一下哈哈
+
+</div>

@@ -94,6 +94,16 @@
     "description": "临时文件保留秒数（0 表示立即删除）",
     "default": 60
   },
+  "ffmpegCompress": {
+    "type": "bool",
+    "description": "大文件/FLAC 无法作为文件发送时（QQ 官方无分片上传、或发送失败），用 ffmpeg 压成紧凑 mp3 兜底发送",
+    "default": true
+  },
+  "compressBitrate": {
+    "type": "int",
+    "description": "压缩兜底 mp3 码率（kbps）",
+    "default": 128
+  },
   "identifyPrefix": {
     "type": "string",
     "description": "识别提示前缀",
@@ -107,6 +117,11 @@
   "qqofficialAdapt": {
     "type": "bool",
     "description": "QQ 官方机器人专用适配：合并消息以规避被动回复额度、语音(silk)发送失败自动回退文件、跳过不支持的原生卡片",
+    "default": true
+  },
+  "qqofficialChunkedUpload": {
+    "type": "bool",
+    "description": "QQ 官方大文件分片上传（需 AstrBot ≥ 4.27.3）：FLAC/>10MB 文件以分片方式发送。关闭则保留旧守卫（大文件仅发语音 silk）",
     "default": true
   },
   "renderListCard": {

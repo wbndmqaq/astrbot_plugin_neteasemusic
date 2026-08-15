@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import shutil
 import time
 from pathlib import Path
 
@@ -29,8 +30,46 @@ def _is_qqofficial(event) -> bool:
 
 
 def _is_weixin_oc(event) -> bool:
-
     return "weixin_oc" in _platform_name(event)
+
+
+def _qq_official_chunked_upload_supported(astrbot_version: str | None = None) -> bool:
+    """AstrBot ≥ 4.27.3 的 QQ 官方适配器对本地大文件自动走分片上传。
+
+    Args:
+        astrbot_version: AstrBot 版本串；缺省取运行时的 ``astrbot.__version__``。
+    """
+    if astrbot_version is None:
+        try:
+            from astrbot import __version__ as astrbot_version
+        except Exception:
+            return False
+    m = re.match(r"(\d+)\.(\d+)\.(\d+)", str(astrbot_version))
+    return bool(m) and tuple(int(x) for x in m.groups()) >= (4, 27, 3)
+
+
+def _should_block_qqofficial_file(
+    *,
+    is_qqoff: bool,
+    want_file: bool,
+    file_size: int,
+    ext: str,
+    cfg: dict,
+) -> bool:
+    """QQ 官方平台是否跳过文件上传，仅发语音。
+
+    开启 ``qqofficialChunkedUpload`` 且 AstrBot ≥ 4.27.3（适配器对本地大文件自动
+    分片上传）时放行 FLAC/>10MB 文件；否则旧守卫生效：>10MB 或 .flac 跳过文件上传。
+    """
+    if not (is_qqoff and want_file):
+        return False
+    chunk_on = (
+        cfg.get("qqofficialChunkedUpload", True) is not False
+        and _qq_official_chunked_upload_supported()
+    )
+    if chunk_on:
+        return False
+    return file_size > 10 * 1024 * 1024 or ext.lower() == ".flac"
 
 
 def get_temp_dir(cfg: dict, plugin_dir: str) -> str:
@@ -78,6 +117,7 @@ def _ext_for_quality(quality_hint: str, url: str) -> str:
 async def download_audio(
     url: str, save_dir: str, filename: str = "neteasemusic", timeout_ms: int = 90000, quality_hint: str = ""
 ) -> dict:
+    """流式下载音频到本地临时文件；内容过小/HTML 报错，失败时清理残留文件。"""
     headers = {
         "User-Agent": UA,
         "Referer": "https://music.163.com/",
@@ -90,21 +130,32 @@ async def download_audio(
     file_path = os.path.join(save_dir, f"{safe_name}_{int(time.time() * 1000)}{ext}")
 
     timeout = aiohttp.ClientTimeout(total=timeout_ms / 1000)
-    async with (
-        aiohttp.ClientSession(timeout=timeout) as sess,
-        sess.get(url, headers=headers, allow_redirects=True) as res,
-    ):
-        if res.status >= 400:
-            raise RuntimeError(f"下载失败 HTTP {res.status}")
-        data = await res.read()
-        if len(data) < 256:
+    size = 0
+    try:
+        async with (
+            aiohttp.ClientSession(timeout=timeout) as sess,
+            sess.get(url, headers=headers, allow_redirects=True) as res,
+        ):
+            if res.status >= 400:
+                raise RuntimeError(f"下载失败 HTTP {res.status}")
+            with open(file_path, "wb") as f:
+                async for chunk in res.content.iter_chunked(64 * 1024):
+                    if size == 0:
+                        head = chunk[:32].decode("utf-8", errors="ignore").lower()
+                        if "<html" in head or "<!doctype" in head:
+                            raise RuntimeError("下载内容为 HTML，音频链接已失效")
+                    f.write(chunk)
+                    size += len(chunk)
+        if size < 256:
             raise RuntimeError("下载内容过小，可能是无效链接")
-        head = data[:32].decode("utf-8", errors="ignore").lower()
-        if "<html" in head or "<!doctype" in head:
-            raise RuntimeError("下载内容为 HTML，音频链接已失效")
-        with open(file_path, "wb") as f:
-            f.write(data)
-    return {"filePath": file_path, "size": len(data)}
+    except Exception:
+        if os.path.exists(file_path):
+            try:
+                os.remove(file_path)
+            except Exception:
+                pass
+        raise
+    return {"filePath": file_path, "size": size}
 
 
 def _schedule_cleanup(file_path: str, keep_sec: int):
@@ -122,7 +173,6 @@ def _schedule_cleanup(file_path: str, keep_sec: int):
 
 
 async def send_native_music_card(event, music_id: str) -> bool:
-
     try:
         bot = event.platform
         send_api = getattr(bot, "send_api", None) or getattr(bot, "sendApi", None)
@@ -143,6 +193,159 @@ async def send_native_music_card(event, music_id: str) -> bool:
                 return False
     except Exception:
         return False
+
+
+def _ffmpeg_path() -> str | None:
+    """返回 ffmpeg 可执行路径；未安装返回 None。"""
+    try:
+        return shutil.which("ffmpeg")
+    except Exception:
+        return None
+
+
+async def _compress_to_mp3(local_path: str, bitrate_kbps: int = 128) -> str | None:
+    """用 ffmpeg 把音频压成紧凑 mp3，返回新文件路径；ffmpeg 缺失或失败返回 None。
+
+    输出放在源文件同目录，文件名 ``compact_<毫秒时间戳>.mp3``。
+    """
+    ffmpeg = _ffmpeg_path()
+    if not ffmpeg:
+        return None
+    out_path = os.path.join(
+        os.path.dirname(local_path), f"compact_{int(time.time() * 1000)}.mp3"
+    )
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            ffmpeg, "-y", "-i", local_path, "-vn", "-b:a", f"{bitrate_kbps}k", "-ac", "2",
+            out_path,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        return_code = await proc.wait()
+    except Exception:
+        return None
+    if return_code != 0 or not os.path.exists(out_path):
+        return None
+    return out_path
+
+
+async def _deliver_local_audio(
+    plugin,
+    event,
+    *,
+    cfg: dict,
+    is_qqoff: bool,
+    is_wxoc: bool,
+    title: str,
+    singer: str,
+    local_path: str,
+    file_size: int,
+    pending_text: str = "",
+    filename_quality: str = "",
+    include_quality: bool = False,
+) -> dict:
+    """把已下载的本地音频按配置双通道投递（语音 silk + 文件），并调度清理临时文件。
+
+    - 个人微信（weixin_oc）出站不支持 Record 语音 → 语音自动降级为文件发送
+    - QQ 官方大文件（>10MB/FLAC）守卫：分片上传不可用时跳过文件仅发语音
+    - 大文件/FLAC 无法作为文件发送时（守卫拦截、或发送失败）→ ffmpeg 压成紧凑 mp3 兜底
+    - 文案（pending_text）挂在首个成功发送的媒体上；全部失败则单独补发文案兜底
+    - 语音/文件互不阻塞：任一失败不影响另一个；清理始终执行避免临时文件残留
+    """
+    keep_sec = int(cfg.get("keepFileSec", 60))
+    want_vocal = bool(cfg.get("sendVocal"))
+    want_file = bool(cfg.get("uploadFile"))
+    if is_wxoc:
+        want_vocal = False
+        want_file = want_file or bool(cfg.get("sendVocal"))
+    ext = os.path.splitext(local_path)[1] or ".mp3"
+
+    def _file_display(ext_override: str = ext) -> str:
+        return build_music_filename(
+            singer=singer,
+            title=title,
+            quality=filename_quality,
+            ext=ext_override,
+            include_quality=include_quality,
+        )
+
+    # QQ 官方大文件（>10MB/FLAC）守卫：分片上传可用则放行；否则 ffmpeg 压成紧凑 mp3 兜底
+    file_blocked = _should_block_qqofficial_file(
+        is_qqoff=is_qqoff, want_file=want_file, file_size=file_size, ext=ext, cfg=cfg
+    )
+    ffmpeg_compress = (
+        cfg.get("ffmpegCompress", True) is not False and _ffmpeg_path() is not None
+    )
+    compress_bitrate = max(32, int(cfg.get("compressBitrate") or 128))
+
+    # 文件通道候选：(display, 路径, 已压缩标记)；None = 不发文件
+    file_payload = None
+    if want_file:
+        if file_blocked:
+            if ffmpeg_compress:
+                compressed = await _compress_to_mp3(local_path, compress_bitrate)
+                if compressed:
+                    file_payload = (_file_display(".mp3"), compressed, True)
+            if file_payload:
+                plugin._log_warn(
+                    f"文件过大已 ffmpeg 压成紧凑 mp3 发送：{title} - {singer} "
+                    f"{ext} 约 {file_size / 1024 / 1024:.1f}MB"
+                )
+            else:
+                plugin._log_warn(
+                    f"文件发送已跳过（QQ 官方）：{title} - {singer} {ext} 约 "
+                    f"{file_size / 1024 / 1024:.1f}MB，"
+                    f"{('改发语音(silk)转码版本' if want_vocal else '且语音发送未开启，音频文件未发送')}"
+                )
+        else:
+            file_payload = (_file_display(), local_path, False)
+
+    async def _send_media(media_comp):
+        comps = [plugin._plain(pending_text), media_comp] if pending_text else [media_comp]
+        await plugin._send_chain(event, *comps)
+
+    async def _send_file_payload() -> None:
+        """发送文件；发送失败且未压缩过时 ffmpeg 压成紧凑 mp3 重试一次。"""
+        nonlocal pending_text
+        display, path, is_compressed = file_payload
+        try:
+            await _send_media(File(display, file=path))
+            pending_text = ""
+            return
+        except Exception as e:
+            plugin._log_warn(f"文件发送失败{'（QQ 官方）' if is_qqoff else ''}: {e}")
+        if is_compressed or not ffmpeg_compress:
+            return
+        compressed = await _compress_to_mp3(path, compress_bitrate)
+        if not compressed:
+            return
+        plugin._log_warn("文件过大发送失败，已 ffmpeg 压成紧凑 mp3 重试")
+        try:
+            await _send_media(File(_file_display(".mp3"), file=compressed))
+            pending_text = ""
+        except Exception as e2:
+            plugin._log_warn(f"压缩版文件发送仍失败: {e2}")
+        finally:
+            _schedule_cleanup(compressed, keep_sec)
+
+    try:
+        if want_vocal:
+            try:
+                await _send_media(Record.fromFileSystem(local_path))
+                pending_text = ""
+            except Exception as e:
+                plugin._log_warn(f"语音发送失败{'（QQ 官方）' if is_qqoff else ''}: {e}")
+        if file_payload:
+            await _send_file_payload()
+    finally:
+        _schedule_cleanup(local_path, keep_sec)
+        if file_payload and file_payload[1] != local_path:
+            _schedule_cleanup(file_payload[1], keep_sec)
+
+    if pending_text:
+        await plugin._send_chain(event, plugin._plain(pending_text))
+
+    return {"ok": True, "downloaded": True}
 
 
 async def deliver_song(
@@ -211,52 +414,17 @@ async def deliver_song(
         await plugin._send_chain(event, plugin._plain(f"下载音频失败：{err}\n可尝试 #ncm登录 后重发，或换一首歌"))
         return {"ok": False, "reason": "download_fail", "error": str(err)}
 
-    keep_sec = int(cfg.get("keepFileSec", 60))
-    want_vocal = bool(cfg.get("sendVocal"))
-    want_file = bool(cfg.get("uploadFile"))
-    # 个人微信（weixin_oc）出站不支持 Record 语音（adapter 的 send_by_session 只收
-    # Plain/Image/Video/File，Record 会被静默跳过）→ 语音自动降级为文件发送
-    if is_wxoc:
-        want_vocal = False
-        want_file = want_file or bool(cfg.get("sendVocal"))
-    ext = os.path.splitext(local_path)[1] or ".mp3"
-    file_display = build_music_filename(
-        singer=singer, title=title, quality=play.get("level") or cfg.get("quality") or "", ext=ext
+    return await _deliver_local_audio(
+        plugin,
+        event,
+        cfg=cfg,
+        is_qqoff=is_qqoff,
+        is_wxoc=is_wxoc,
+        title=title,
+        singer=singer,
+        local_path=local_path,
+        file_size=int(dl.get("size", 0)),
+        pending_text=pending_text,
+        filename_quality=play.get("level") or cfg.get("quality") or "",
+        include_quality=True,
     )
-    # QQ 官方 /files 上传 base64 后体积约 +33%，无损 FLAC(~30MB)必然 413，且会被
-    # _qqofficial_retry 重试 5 次(约 30s)后放弃并留下裸 markdown 触发 40034011。
-    # 文件分量走原始路径不做转码，故按大小/后缀守卫：超限直接跳过文件上传，保留语音(silk)。
-    file_size = int(dl.get("size", 0))
-    file_blocked = is_qqoff and want_file and (file_size > 10 * 1024 * 1024 or ext.lower() == ".flac")
-    if file_blocked:
-        plugin._log_warn(
-            f"文件发送已跳过（QQ 官方）：{title} - {singer} {ext} 约 {file_size / 1024 / 1024:.1f}MB，"
-            "超出官方接口上传限制，改发语音(silk)转码版本"
-        )
-
-    async def _send_media(media_comp):
-        comps = [plugin._plain(pending_text), media_comp] if pending_text else [media_comp]
-        await plugin._send_chain(event, *comps)
-
-    # 语音(silk 转码)与文件互不阻塞：任一失败不影响另一个；清理始终执行避免临时文件残留
-    try:
-        if want_vocal:
-            try:
-                await _send_media(Record.fromFileSystem(local_path))
-                pending_text = ""
-            except Exception as e:
-                plugin._log_warn(f"语音发送失败{'（QQ 官方）' if is_qqoff else ''}: {e}")
-        if want_file and not file_blocked:
-            try:
-                await _send_media(File(file_display, file=local_path))
-                pending_text = ""
-            except Exception as e:
-                plugin._log_warn(f"文件发送失败{'（QQ 官方）' if is_qqoff else ''}: {e}")
-    finally:
-        _schedule_cleanup(local_path, keep_sec)
-
-    # 兜底：所有媒体发送均失败时，至少把文案发出去
-    if pending_text:
-        await plugin._send_chain(event, plugin._plain(pending_text))
-
-    return {"ok": True, "downloaded": True}

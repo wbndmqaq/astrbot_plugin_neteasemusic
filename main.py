@@ -374,7 +374,7 @@ class NeteaseMusicPlugin(Star):
 
     @filter.regex(re.compile(r"^#?(ncm|NCM)\s*点歌\s*(.+)$", re.IGNORECASE))
     async def pick_song(self, event: AstrMessageEvent):
-
+        """#ncm点歌 关键词：搜索并列出歌曲，供会话内 #ncm听N 播放"""
         cfg = self._cfg()
         m = self._cmd(event, r"^#?(?:ncm|NCM)\s*点歌\s*(.+)$", song_request=True)
         if not m:
@@ -401,7 +401,7 @@ class NeteaseMusicPlugin(Star):
 
     @filter.regex(re.compile(r"^#?(ncm|NCM)\s*听\s*([1-9][0-9]?)$|^#听\s*([1-9][0-9]?)$", re.IGNORECASE))
     async def choose_song(self, event: AstrMessageEvent):
-
+        """#ncm听N / #听N：播放列表第 N 首"""
         cfg = self._cfg()
         if not cfg.get("enable", True) or cfg.get("enableSongRequest") is False:
             return
@@ -429,7 +429,7 @@ class NeteaseMusicPlugin(Star):
 
     @filter.regex(re.compile(r"^#?(ncm|NCM)\s*播放\s*(.+)$", re.IGNORECASE))
     async def play_direct(self, event: AstrMessageEvent):
-
+        """#ncm播放 关键词：搜索并直接播放第一首"""
         m = self._cmd(event, r"^#?(?:ncm|NCM)\s*播放\s*(.+)$", song_request=True)
         if not m:
             return
@@ -453,7 +453,7 @@ class NeteaseMusicPlugin(Star):
 
     @filter.regex(re.compile(r"^#?(ncm|NCM)\s*歌词\s*(.+)$", re.IGNORECASE))
     async def get_lyric(self, event: AstrMessageEvent):
-
+        """#ncm歌词 关键词|id：获取歌词"""
         m = self._cmd(event, r"^#?(?:ncm|NCM)\s*歌词\s*(.+)$")
         if not m:
             return
@@ -507,7 +507,7 @@ class NeteaseMusicPlugin(Star):
 
     @filter.regex(re.compile(r"^#?(ncm|NCM)\s*热搜$", re.IGNORECASE))
     async def hot_search(self, event: AstrMessageEvent):
-
+        """#ncm热搜：热搜榜"""
         if not self._cfg().get("enable", True):
             return
         try:
@@ -527,7 +527,7 @@ class NeteaseMusicPlugin(Star):
 
     @filter.regex(re.compile(r"^#?(ncm|NCM)\s*(help|帮助|菜单)$", re.IGNORECASE))
     async def help(self, event: AstrMessageEvent):
-
+        """#ncm帮助：帮助卡片（指令一览）"""
         if not self._cfg().get("enable", True):
             return
         try:
@@ -556,7 +556,7 @@ class NeteaseMusicPlugin(Star):
 
     @filter.regex(re.compile(r"^#?(ncm|NCM)\s*排行\s*(.*)$", re.IGNORECASE))
     async def chart(self, event: AstrMessageEvent):
-
+        """#ncm排行 [榜单名]：排行榜列表 / 查看具体榜单"""
         if not self._cfg().get("enable", True):
             return
         user_key = self._user_key(event)
@@ -618,7 +618,7 @@ class NeteaseMusicPlugin(Star):
 
     @filter.regex(re.compile(r"^#?(ncm|NCM)\s*歌手\s+(.+)$", re.IGNORECASE))
     async def artist(self, event: AstrMessageEvent):
-
+        """#ncm歌手 关键词：歌手热门歌曲"""
         m = self._cmd(event, r"^#?(?:ncm|NCM)\s*歌手\s+(.+)$")
         if not m:
             return
@@ -647,7 +647,7 @@ class NeteaseMusicPlugin(Star):
 
     @filter.regex(re.compile(r"^#?(ncm|NCM)\s*专辑\s+(.+)$", re.IGNORECASE))
     async def album(self, event: AstrMessageEvent):
-
+        """#ncm专辑 关键词：专辑曲目"""
         m = self._cmd(event, r"^#?(?:ncm|NCM)\s*专辑\s+(.+)$")
         if not m:
             return
@@ -680,7 +680,7 @@ class NeteaseMusicPlugin(Star):
 
     @filter.regex(re.compile(r"^#?(ncm|NCM)\s*歌单\s+(.+)$", re.IGNORECASE))
     async def playlist(self, event: AstrMessageEvent):
-
+        """#ncm歌单 关键词：歌单曲目"""
         m = self._cmd(event, r"^#?(?:ncm|NCM)\s*歌单\s+(.+)$")
         if not m:
             return
@@ -710,7 +710,7 @@ class NeteaseMusicPlugin(Star):
 
     @filter.regex(re.compile(r"^#?(ncm|NCM)\s*评论\s+(.+)$", re.IGNORECASE))
     async def get_comment(self, event: AstrMessageEvent):
-
+        """#ncm评论 关键词：歌曲热评"""
         m = self._cmd(event, r"^#?(?:ncm|NCM)\s*评论\s+(.+)$")
         if not m:
             return
@@ -742,7 +742,7 @@ class NeteaseMusicPlugin(Star):
 
     @filter.regex(re.compile(r"^#?(ncm|NCM)\s*相似\s+(.+)$", re.IGNORECASE))
     async def simi(self, event: AstrMessageEvent):
-
+        """#ncm相似 关键词|id：相似歌曲"""
         m = self._cmd(event, r"^#?(?:ncm|NCM)\s*相似\s+(.+)$")
         if not m:
             return
@@ -768,7 +768,7 @@ class NeteaseMusicPlugin(Star):
 
     @filter.regex(re.compile(r"^#?(ncm|NCM)\s*相关歌单\s+(.+)$", re.IGNORECASE))
     async def related_playlist(self, event: AstrMessageEvent):
-
+        """#ncm相关歌单 歌单名|id：相关歌单推荐"""
         m = self._cmd(event, r"^#?(?:ncm|NCM)\s*相关歌单\s+(.+)$")
         if not m:
             return
@@ -806,7 +806,7 @@ class NeteaseMusicPlugin(Star):
 
     @filter.regex(re.compile(r"^#?(ncm|NCM)\s*新歌\s*(.*)$", re.IGNORECASE))
     async def new_song(self, event: AstrMessageEvent):
-
+        """#ncm新歌 [地区]：新歌速递（华语/欧美/日本/韩国）"""
         m = self._cmd(event, r"^#?(?:ncm|NCM)\s*新歌\s*(.*)$")
         if not m:
             return
@@ -828,7 +828,7 @@ class NeteaseMusicPlugin(Star):
 
     @filter.regex(re.compile(r"^#?(ncm|NCM)\s*精品歌单\s*(.*)$", re.IGNORECASE))
     async def highquality(self, event: AstrMessageEvent):
-
+        """#ncm精品歌单 [分类]：精品歌单"""
         m = self._cmd(event, r"^#?(?:ncm|NCM)\s*精品歌单\s*(.*)$")
         if not m:
             return
@@ -859,7 +859,7 @@ class NeteaseMusicPlugin(Star):
 
     @filter.regex(re.compile(r"^#?(ncm|NCM)\s*搜索建议\s+(.+)$", re.IGNORECASE))
     async def suggest(self, event: AstrMessageEvent):
-
+        """#ncm搜索建议 关键词：关键词补全"""
         m = self._cmd(event, r"^#?(?:ncm|NCM)\s*搜索建议\s+(.+)$")
         if not m:
             return
@@ -891,7 +891,7 @@ class NeteaseMusicPlugin(Star):
 
     @filter.regex(re.compile(r"^#?(ncm|NCM)\s*banner$", re.IGNORECASE))
     async def banner(self, event: AstrMessageEvent):
-
+        """#ncmbanner：首页轮播"""
         if not self._cfg().get("enable", True):
             return
         try:
@@ -928,7 +928,7 @@ class NeteaseMusicPlugin(Star):
 
     @filter.regex(re.compile(r"^#?(ncm|NCM)\s*歌单分类$", re.IGNORECASE))
     async def catlist(self, event: AstrMessageEvent):
-
+        """#ncm歌单分类：歌单分类列表"""
         if not self._cfg().get("enable", True):
             return
         try:
@@ -963,7 +963,7 @@ class NeteaseMusicPlugin(Star):
 
     @filter.regex(re.compile(r"^#?(ncm|NCM)\s*MV\s+(.+)$", re.IGNORECASE))
     async def mv(self, event: AstrMessageEvent):
-
+        """#ncmMV 关键词：MV 详情与播放链接"""
         m = self._cmd(event, r"^#?(?:ncm|NCM)\s*MV\s+(.+)$")
         if not m:
             return
@@ -998,7 +998,7 @@ class NeteaseMusicPlugin(Star):
 
     @filter.regex(re.compile(r"^#?(ncm|NCM)\s*相似歌单\s+(.+)$", re.IGNORECASE))
     async def simi_playlist(self, event: AstrMessageEvent):
-
+        """#ncm相似歌单 关键词|id：相似歌单"""
         m = self._cmd(event, r"^#?(?:ncm|NCM)\s*相似歌单\s+(.+)$")
         if not m:
             return
@@ -1035,7 +1035,7 @@ class NeteaseMusicPlugin(Star):
 
     @filter.regex(re.compile(r"^#?(ncm|NCM)\s*歌手榜$", re.IGNORECASE))
     async def toplist_artist(self, event: AstrMessageEvent):
-
+        """#ncm歌手榜：歌手榜"""
         if not self._cfg().get("enable", True):
             return
         try:
@@ -1066,7 +1066,7 @@ class NeteaseMusicPlugin(Star):
 
     @filter.regex(re.compile(r"^#?(ncm|NCM)\s*新碟$", re.IGNORECASE))
     async def album_newest(self, event: AstrMessageEvent):
-
+        """#ncm新碟：新碟上架"""
         if not self._cfg().get("enable", True):
             return
         try:
@@ -1110,7 +1110,7 @@ class NeteaseMusicPlugin(Star):
 
     @filter.regex(re.compile(r"^#?(ncm|NCM)\s*热门歌手$", re.IGNORECASE))
     async def top_artists(self, event: AstrMessageEvent):
-
+        """#ncm热门歌手：热门歌手"""
         if not self._cfg().get("enable", True):
             return
         try:
@@ -1141,7 +1141,7 @@ class NeteaseMusicPlugin(Star):
 
     @filter.regex(re.compile(r"^#?(ncm|NCM)\s*新碟榜\s*(.*)$", re.IGNORECASE))
     async def top_album(self, event: AstrMessageEvent):
-
+        """#ncm新碟榜 [地区]：新碟排行（华语/欧美/日本/韩国）"""
         m = self._cmd(event, r"^#?(?:ncm|NCM)\s*新碟榜\s*(.*)$")
         if not m:
             return
@@ -1178,7 +1178,7 @@ class NeteaseMusicPlugin(Star):
 
     @filter.regex(re.compile(r"^#?(ncm|NCM)\s*MV榜$", re.IGNORECASE))
     async def top_mv(self, event: AstrMessageEvent):
-
+        """#ncmMV榜：MV 排行"""
         if not self._cfg().get("enable", True):
             return
         try:
@@ -1222,7 +1222,7 @@ class NeteaseMusicPlugin(Star):
 
     @filter.regex(re.compile(r"^#?(ncm|NCM)\s*电台$", re.IGNORECASE))
     async def dj_recommend(self, event: AstrMessageEvent):
-
+        """#ncm电台：电台推荐"""
         if not self._cfg().get("enable", True):
             return
         try:
@@ -1268,7 +1268,7 @@ class NeteaseMusicPlugin(Star):
 
     @filter.regex(re.compile(r"^#?(ncm|NCM)\s*歌单榜\s*(.*)$", re.IGNORECASE))
     async def top_playlist(self, event: AstrMessageEvent):
-
+        """#ncm歌单榜 [分类]：分类歌单榜"""
         m = self._cmd(event, r"^#?(?:ncm|NCM)\s*歌单榜\s*(.*)$")
         if not m:
             return
@@ -1298,7 +1298,7 @@ class NeteaseMusicPlugin(Star):
 
     @filter.regex(re.compile(r"^#?(ncm|NCM)\s*热门分类$", re.IGNORECASE))
     async def playlist_hot_tags(self, event: AstrMessageEvent):
-
+        """#ncm热门分类：热门歌单分类"""
         if not self._cfg().get("enable", True):
             return
         try:
@@ -1331,7 +1331,7 @@ class NeteaseMusicPlugin(Star):
 
     @filter.regex(re.compile(r"^#?(ncm|NCM)\s*逐字歌词\s+(.+)$", re.IGNORECASE))
     async def lyric_word(self, event: AstrMessageEvent):
-
+        """#ncm逐字歌词 关键词|id：逐字歌词"""
         m = self._cmd(event, r"^#?(?:ncm|NCM)\s*逐字歌词\s+(.+)$")
         if not m:
             return
@@ -1402,7 +1402,7 @@ class NeteaseMusicPlugin(Star):
 
     @filter.regex(re.compile(r"^#?(ncm|NCM)\s*专辑评论\s+(.+)$", re.IGNORECASE))
     async def album_comment(self, event: AstrMessageEvent):
-
+        """#ncm专辑评论 关键词：专辑热评"""
         m = self._cmd(event, r"^#?(?:ncm|NCM)\s*专辑评论\s+(.+)$")
         if not m:
             return
@@ -1434,7 +1434,7 @@ class NeteaseMusicPlugin(Star):
 
     @filter.regex(re.compile(r"^#?(ncm|NCM)\s*歌单评论\s+(.+)$", re.IGNORECASE))
     async def playlist_comment(self, event: AstrMessageEvent):
-
+        """#ncm歌单评论 关键词：歌单热评"""
         m = self._cmd(event, r"^#?(?:ncm|NCM)\s*歌单评论\s+(.+)$")
         if not m:
             return
@@ -1468,7 +1468,7 @@ class NeteaseMusicPlugin(Star):
 
     @filter.regex(re.compile(r"^#?(ncm|NCM)\s*推荐$", re.IGNORECASE))
     async def recommend(self, event: AstrMessageEvent):
-
+        """#ncm推荐：推荐歌单（需登录）"""
         if not self._cfg().get("enable", True):
             return
         try:
@@ -1496,7 +1496,7 @@ class NeteaseMusicPlugin(Star):
 
     @filter.regex(re.compile(r"^#?(ncm|NCM)\s*(来首歌|随机|放一首|来一首)$", re.IGNORECASE))
     async def random_song(self, event: AstrMessageEvent):
-
+        """#ncm来首歌：随机来一首（个人 FM，未登录退推荐新歌）"""
         if not self._cfg().get("enable", True):
             return
         user_key = self._user_key(event)
@@ -1519,7 +1519,7 @@ class NeteaseMusicPlugin(Star):
 
     @filter.regex(re.compile(r"^#?(ncm|NCM)\s*(日推|每日推荐)$", re.IGNORECASE))
     async def daily(self, event: AstrMessageEvent):
-
+        """#ncm日推：每日推荐（需登录）"""
         if not self._cfg().get("enable", True):
             return
         user_key = self._user_key(event)
@@ -1537,7 +1537,7 @@ class NeteaseMusicPlugin(Star):
 
     @filter.regex(re.compile(r"^#?(ncm|NCM)\s*推荐新歌$", re.IGNORECASE))
     async def newsong_recommend(self, event: AstrMessageEvent):
-
+        """#ncm推荐新歌：推荐新歌"""
         if not self._cfg().get("enable", True):
             return
         try:
@@ -1554,7 +1554,7 @@ class NeteaseMusicPlugin(Star):
 
     @filter.regex(re.compile(r"^#?(ncm|NCM)\s*喜欢$", re.IGNORECASE))
     async def like_list(self, event: AstrMessageEvent):
-
+        """#ncm喜欢：我喜欢的音乐（需登录）"""
         if not self._cfg().get("enable", True):
             return
         user_key = self._user_key(event)
@@ -1577,7 +1577,7 @@ class NeteaseMusicPlugin(Star):
 
     @filter.regex(re.compile(r"^#?(ncm|NCM)\s*听歌排行$", re.IGNORECASE))
     async def user_record(self, event: AstrMessageEvent):
-
+        """#ncm听歌排行：本周听歌排行（需登录）"""
         if not self._cfg().get("enable", True):
             return
         user_key = self._user_key(event)
@@ -1609,7 +1609,7 @@ class NeteaseMusicPlugin(Star):
     @filter.regex(re.compile(r"^#?(ncm|NCM)\s*签到$", re.IGNORECASE), priority=6)
     @filter.permission_type(filter.PermissionType.ADMIN)
     async def daily_signin(self, event: AstrMessageEvent):
-
+        """#ncm签到：每日签到领经验（需登录/主人）"""
         if not self._cfg().get("enable", True):
             return
         user_key = self._user_key(event)
@@ -1632,7 +1632,7 @@ class NeteaseMusicPlugin(Star):
     @filter.regex(re.compile(r"^#?(ncm|NCM)\s*云盘$", re.IGNORECASE), priority=6)
     @filter.permission_type(filter.PermissionType.ADMIN)
     async def user_cloud(self, event: AstrMessageEvent):
-
+        """#ncm云盘：我的云盘歌曲（需登录/主人）"""
         if not self._cfg().get("enable", True):
             return
         user_key = self._user_key(event)
@@ -1651,7 +1651,7 @@ class NeteaseMusicPlugin(Star):
     @filter.regex(re.compile(r"^#?(ncm|NCM)\s*最近$", re.IGNORECASE), priority=6)
     @filter.permission_type(filter.PermissionType.ADMIN)
     async def recent_song(self, event: AstrMessageEvent):
-
+        """#ncm最近：最近播放歌曲（需登录/主人）"""
         if not self._cfg().get("enable", True):
             return
         user_key = self._user_key(event)
@@ -1683,7 +1683,7 @@ class NeteaseMusicPlugin(Star):
     @filter.regex(re.compile(r"^#?(ncm|NCM)\s*我的歌单$", re.IGNORECASE), priority=6)
     @filter.permission_type(filter.PermissionType.ADMIN)
     async def my_playlist(self, event: AstrMessageEvent):
-
+        """#ncm我的歌单：我创建/收藏的歌单（需登录/主人）"""
         if not self._cfg().get("enable", True):
             return
         user_key = self._user_key(event)
@@ -1718,7 +1718,7 @@ class NeteaseMusicPlugin(Star):
     @filter.regex(re.compile(r"^#?(ncm|NCM)\s*红心\s+(.+)$", re.IGNORECASE), priority=6)
     @filter.permission_type(filter.PermissionType.ADMIN)
     async def like_toggle(self, event: AstrMessageEvent):
-
+        """#ncm红心 关键词：红心/取消红心（自动判断状态，需登录/主人）"""
         if not self._cfg().get("enable", True):
             return
         m = re.match(r"^#?(?:ncm|NCM)\s*红心\s+(.+)$", event.message_str.strip(), re.IGNORECASE)
@@ -1748,7 +1748,7 @@ class NeteaseMusicPlugin(Star):
     @filter.regex(re.compile(r"^#?(ncm|NCM)\s*取消红心\s+(.+)$", re.IGNORECASE), priority=6)
     @filter.permission_type(filter.PermissionType.ADMIN)
     async def unlike(self, event: AstrMessageEvent):
-
+        """#ncm取消红心 关键词：直接取消红心（需登录/主人）"""
         if not self._cfg().get("enable", True):
             return
         m = re.match(r"^#?(?:ncm|NCM)\s*取消红心\s+(.+)$", event.message_str.strip(), re.IGNORECASE)
@@ -1770,7 +1770,7 @@ class NeteaseMusicPlugin(Star):
     @filter.regex(re.compile(r"^#?(ncm|NCM)\s*历史日推$", re.IGNORECASE), priority=6)
     @filter.permission_type(filter.PermissionType.ADMIN)
     async def history_daily(self, event: AstrMessageEvent):
-
+        """#ncm历史日推：历史每日推荐（需登录/主人）"""
         if not self._cfg().get("enable", True):
             return
         user_key = self._user_key(event)
@@ -1795,7 +1795,7 @@ class NeteaseMusicPlugin(Star):
     @filter.regex(re.compile(r"^#?(ncm登录|ncm扫码登录|网易云登录|网易云扫码登录)$", re.IGNORECASE), priority=6)
     @filter.permission_type(filter.PermissionType.ADMIN)
     async def start_qr_login(self, event: AstrMessageEvent):
-
+        """#ncm登录：扫码登录（二维码轮询自动写入 Cookie，仅主人）"""
         cfg = self._cfg()
         if not cfg.get("enable", True):
             return
@@ -1993,7 +1993,7 @@ class NeteaseMusicPlugin(Star):
 
     @filter.regex(re.compile(r"^#?(ncm状态|ncm登录状态|ncms)$", re.IGNORECASE), priority=6)
     async def login_status_cmd(self, event: AstrMessageEvent):
-
+        """#ncm状态 / #ncms：查看登录状态"""
         if not self._cfg().get("enable", True):
             return
         await self._send_status(event, self._user_key(event))
@@ -2002,7 +2002,7 @@ class NeteaseMusicPlugin(Star):
     @filter.regex(re.compile(r"^#?(ncm登出|ncm注销|ncm解绑)$", re.IGNORECASE), priority=6)
     @filter.permission_type(filter.PermissionType.ADMIN)
     async def logout(self, event: AstrMessageEvent):
-
+        """#ncm登出：登出并清除本地 Cookie（仅主人）"""
         user_key = self._user_key(event)
         try:
             try:
@@ -2026,7 +2026,7 @@ class NeteaseMusicPlugin(Star):
     @filter.regex(re.compile(r"^#?(ncm设置|ncm配置|网易云设置)$", re.IGNORECASE), priority=6)
     @filter.permission_type(filter.PermissionType.ADMIN)
     async def settings(self, event: AstrMessageEvent):
-
+        """#ncm设置：设置面板（登录态/音质/开关/脱敏 API）"""
         cfg = self._cfg()
         user_key = self._user_key(event)
         try:
@@ -2045,7 +2045,7 @@ class NeteaseMusicPlugin(Star):
     @filter.regex(re.compile(r"^#?(ncm|NCM)\s*音质\s*(.+)$", re.IGNORECASE), priority=6)
     @filter.permission_type(filter.PermissionType.ADMIN)
     async def quality_cmd(self, event: AstrMessageEvent):
-
+        """#ncm音质 <档位>：修改音质档位"""
         m = re.match(r"^#?(?:ncm|NCM)\s*音质\s*(.+)$", event.message_str.strip(), re.IGNORECASE)
         q = (m.group(1).strip().lower() if m else "").strip()
         if q not in QUALITY_LABEL:
@@ -2060,7 +2060,7 @@ class NeteaseMusicPlugin(Star):
     @filter.regex(re.compile(r"^#?(ncm|NCM)\s*api\s*(https?://\S+)$", re.IGNORECASE))
     @filter.permission_type(filter.PermissionType.ADMIN)
     async def api_cmd(self, event: AstrMessageEvent):
-
+        """#ncm api <地址>：修改 API 地址"""
         m = re.match(r"^#?(?:ncm|NCM)\s*api\s*(https?://\S+)$", event.message_str.strip(), re.IGNORECASE)
         url = m.group(1).strip().rstrip("/") if m else ""
         self.config["apiBase"] = url
@@ -2071,7 +2071,7 @@ class NeteaseMusicPlugin(Star):
     @filter.regex(re.compile(r"^#?(ncm|NCM)\s*(开启|关闭)(点歌|解析)$", re.IGNORECASE))
     @filter.permission_type(filter.PermissionType.ADMIN)
     async def toggle_cmd(self, event: AstrMessageEvent):
-
+        """#ncm 开启/关闭 点歌|解析：功能开关"""
         m = re.match(r"^#?(?:ncm|NCM)\s*(开启|关闭)(点歌|解析)$", event.message_str.strip(), re.IGNORECASE)
         on = (m.group(1) if m else "") == "开启"
         what = (m.group(2) if m else "") or ""
@@ -2086,7 +2086,7 @@ class NeteaseMusicPlugin(Star):
     @filter.regex(re.compile(r"^#?(ncm测试|网易云测试)$", re.IGNORECASE), priority=6)
     @filter.permission_type(filter.PermissionType.ADMIN)
     async def api_test(self, event: AstrMessageEvent):
-
+        """#ncm测试：测试 API 连通性"""
         cfg = self._cfg()
         base = str(cfg.get("apiBase") or "")
         if not base:
@@ -2106,7 +2106,7 @@ class NeteaseMusicPlugin(Star):
 
     @filter.regex(re.compile(r"(music\.163\.com|163music\.com|y\.music\.163\.com|163cn\.tv)", re.IGNORECASE))
     async def resolve(self, event: AstrMessageEvent):
-
+        """自动解析：识别网易云链接/卡片（单曲/歌单/专辑）"""
         cfg = self._cfg()
         if not cfg.get("enable", True) or cfg.get("enableResolve") is False:
             return

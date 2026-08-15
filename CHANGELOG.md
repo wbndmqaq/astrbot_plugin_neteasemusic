@@ -1,6 +1,34 @@
 # 更新日志
 
 
+## [v1.1.3] - 2026-08-15
+
+### ✨ 新功能
+
+- **ffmpeg 压缩兜底**：大文件/FLAC 无法作为文件发送时（QQ 官方无分片上传、或文件发送失败），用 ffmpeg 压成紧凑 mp3（`compressBitrate`，默认 128k）再发送，不再丢失文件通道。新增 `ffmpegCompress` 配置（默认开）；ffmpeg 缺失或压缩失败时退回旧行为（跳过文件仅发语音）
+- 守卫拦截时压缩成功 → 文件名带 `.mp3`；原文件与压缩文件都按 `keepFileSec` 调度清理
+
+### 🧹 质量
+
+- `_deliver_local_audio` 新增 `_ffmpeg_path` / `_compress_to_mp3` 助手；测试扩至 36 用例（压缩成功/失败/无 ffmpeg、守卫拦截压缩兜底、发送失败压缩重试）
+- **修复 53 个 handler 缺失 docstring**（外部修改再次删光）：WebUI 指令列表全部显示「无描述」。按 README 指令一览补齐全部描述（`#ncm命令：说明` 风格，与 kugou 插件一致），ruff/py_compile 全绿
+- 第二轮重构：`_send_file_payload` 扁平化（提前 return 消除深嵌套）；`download_audio` 改流式写入磁盘（大 FLAC 不再整块读入内存），失败时清理残留文件；测试扩至 **42 用例**（新增 download_audio 流式/过小/HTML/HTTP 错误清理 + 压缩重试失败文案兜底）
+
+
+## [v1.1.2] - 2026-08-15
+
+### ✨ 新功能
+
+- **QQ 官方大文件分片上传**：AstrBot ≥ 4.27.3 的 QQ 官方适配器对本地 >10MB 文件自动走分片上传（修复大文件无法发送的问题）。插件新增 `qqofficialChunkedUpload` 配置（默认开）：开启时放行 FLAC/>10MB 文件发送，不再降级为仅语音；关闭或旧版 AstrBot（< 4.27.3）保留原守卫（大文件仅发语音 silk）。语音/文件双通道互不阻塞逻辑不变。
+
+### 🧹 质量
+
+- 守卫逻辑抽成可单测的 `_should_block_qqofficial_file` / `_qq_official_chunked_upload_supported(version)`；修复拦截提示在语音未开启时误导（"改发语音"不成立）→ 改为如实提示"音频文件未发送"；清理 `_is_weixin_oc`/`send_native_music_card` 函数体多余空行
+- `deliver_song` 拆分出可单测的 `_deliver_local_audio`（语音/文件双通道投递 + wxoc 降级 + 文件守卫 + 文案兜底 + 清理调度），`deliver_song` 只负责文案/卡片/下载后委托
+- **修复文件名音质死参数**：`build_music_filename` 传了 `quality` 却漏 `include_quality=True`（代码注释声称"文件名已含歌手-歌名-音质"实际并不含）→ 补上，文件名现含音质档位（如 `周杰伦-晴天_exhigh.mp3`）
+- 新增 `tests/test_delivery_chunked.py`（31 用例，mock 无网络）：版本检测 + 守卫决策矩阵 + 本地音频投递端到端（双发/单发/文件拦截回退语音/全部失败文案兜底/微信降级/清理调度）
+
+
 ## [v1.1.1] - 2026-08-10
 
 v1.1.0 发布后的增量功能
