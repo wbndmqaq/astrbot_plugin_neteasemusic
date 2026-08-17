@@ -31,11 +31,11 @@
 | --- | --- |
 | **AstrBot** | `>=4.16, <5`（推荐 4.26+） |
 | **Playwright** | 安装 `playwright` 依赖+执行 `playwright install chromium` |
-| **API 服务** | [api-enhanced](https://github.com/neteasecloudmusicapienhanced/api-enhanced)（默认 `http://127.0.0.1:3000`） |
+| **API 服务** | [api-enhanced](https://github.com/neteasecloudmusicapienhanced/api-enhanced)（默认启动 `http://127.0.0.1:3000`可改端口） |
 | **node** | api运行时环境（建议V22的LTS版本以上） |
 | **pnpm** | api依赖更新使用 |
 
-> ⚠️ 本插件不内置 API，需自行部署 api-enhanced 服务端，插件通过 HTTP 调用其接口，所有数据来自网易云。（或者用我frp的API，去群里找我）
+> ⚠️ 本插件不内置 API，需自行部署 api-enhanced 服务端，插件通过 HTTP 调用其接口，所有数据来自网易云。（或者用我frp的API）
 
 ### 部署 API 服务（默认有node和pnpm，没有去下载安装）
 
@@ -280,7 +280,7 @@ A：默认 60 秒自动清理。如仍堆积，检查 `keepFileSec` 是否被设
 ---
 ## 📮 用户群
 
-QQ 群（申请api和插件讨论）：[点击加入](https://qm.qq.com/q/8sOZdZTnaw)
+QQ 群（申请frp的api和插件讨论）：[点击加入](https://qm.qq.com/q/8sOZdZTnaw)
 
 ---
 ## 🙏 致谢
