@@ -30,7 +30,6 @@
 | 依赖 | 说明 |
 | --- | --- |
 | **AstrBot** | `>=4.16, <5`（推荐 4.26+） |
-| **Playwright** | 安装 `playwright` 依赖+执行 `playwright install chromium` |
 | **API 服务** | [api-enhanced](https://github.com/neteasecloudmusicapienhanced/api-enhanced)（默认启动 `http://127.0.0.1:3000`可改端口） |
 | **node** | api运行时环境（建议V22的LTS版本以上） |
 | **pnpm** | api依赖更新使用 |
@@ -217,20 +216,6 @@ QQ 官方机器人接口与 OneBot 差异较大，插件做了专项适配：
 
 ---
 
-## 🧹 临时文件管理
-
-插件会在 `tempDir`（默认 `temp/neteasemusic/`）下生成临时文件，并**在发出后自动清理**：
-
-| 类型 | 文件 | 清理策略 |
-| --- | --- | --- |
-| 卡片图片 | `card_*.png` | 发出后 `keepFileSec` 秒清除（`finally` 保证孤儿文件也清） |
-| 二维码 | `qr_*.png` | 发出后 120 秒清除 |
-| 音频文件 | `*_*.mp3/.flac...` | 发出后 `keepFileSec` 秒清除 |
-
-设置 `keepFileSec=0` 即「发出后立即删除」。由于平台适配器在 `await event.send` 返回前已将文件读入内存，即时删除对发送无影响。
-
----
-
 ## 📁 目录结构
 
 ```
@@ -267,9 +252,6 @@ A：确认 `qualityUnblock`（默认开）启用，且 API 服务端 `ENABLE_GEN
 
 **Q：QQ 官方机器人发不出音频文件？**
 A：AstrBot ≥ 4.27.3 起 QQ 官方适配器支持大文件分片上传（`qqofficialChunkedUpload` 默认开），FLAC/>10MB 也可正常发送。若分片不可用或仍发送失败，开启 `ffmpegCompress`（默认开）会用 ffmpeg 压成紧凑 mp3 兜底——请确认本机已安装 ffmpeg。
-
-**Q：卡片不显示图片/渲染失败？**
-A：卡片由本地 Playwright 渲染。确认已安装 `playwright` 依赖并执行过 `playwright install chromium`；如无法渲染，可关闭 `renderListCard` 退回纯文本。
 
 **Q：自动解析不生效？**
 A：确认 `enableResolve` 与 `resolveLinks` 均开启，且消息中含完整 `music.163.com` / `163music.com` 链接。插件指令消息不会被误解析。
