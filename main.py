@@ -5,6 +5,8 @@ import json
 import os
 import random
 import re
+import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -280,7 +282,27 @@ class NeteaseMusicPlugin(Star):
             tmpl = get_jinja_template(tmpl_path)
             html = jinja2.Template(tmpl).render(data=data)
             async with async_playwright() as p:
-                browser = await p.chromium.launch()
+                launch_args = [
+                    "--no-sandbox",
+                    "--disable-setuid-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--disable-gpu",
+                ]
+                try:
+                    browser = await p.chromium.launch(args=launch_args)
+                except Exception as e:
+                    err_msg = str(e)
+                    if "Executable doesn't exist" in err_msg or "playwright install" in err_msg:
+                        logger.warning("[neteasemusic] 未找到 Playwright Chromium，正在尝试通过 npmmirror 镜像源自动下载安装...")
+                        def _install():
+                            cmd = [sys.executable, "-m", "playwright", "install", "chromium"]
+                            env = os.environ.copy()
+                            env["PLAYWRIGHT_DOWNLOAD_HOST"] = "https://npmmirror.com/mirrors/playwright/"
+                            subprocess.run(cmd, capture_output=True, text=True, env=env, check=True)
+                        await asyncio.to_thread(_install)
+                        browser = await p.chromium.launch(args=launch_args)
+                    else:
+                        raise e
                 try:
                     page = await browser.new_page(
                         viewport={"width": 640, "height": 800},

@@ -1,5 +1,15 @@
 # 更新日志
 
+## [v1.1.4] - 2026-08-18
+
+### 🐛 修复与优化
+
+- **Playwright Chromium 自动安装与镜像加速**：
+  - 本地卡片渲染若检测到系统未安装 Playwright Chromium，自动使用 `sys.executable -m playwright install chromium` 进行静默安装并恢复渲染。
+  - 自动注入国内镜像加速源（`PLAYWRIGHT_DOWNLOAD_HOST=https://npmmirror.com/mirrors/playwright/`），大幅提升下载速度，避免 Docker 容器或无梯子环境下卡片渲染失败。
+  - 补充 `--no-sandbox`、`--disable-setuid-sandbox`、`--disable-dev-shm-usage` 等 Docker / Linux 环境防崩溃启动参数。
+- **市场规范元数据补全**：`metadata.yaml` 补充 `social_link` 与 `tags` 分类标签。
+
 
 ## [v1.1.3] - 2026-08-15
 
