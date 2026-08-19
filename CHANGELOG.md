@@ -1,5 +1,17 @@
 # 更新日志
 
+## [v1.1.5] - 2026-08-20
+
+### ✨ 新功能
+
+- **先选歌再操作**：`#ncm歌词` / `#ncm逐字歌词` / `#ncm评论` / `#ncm相似` / `#ncmMV` / `#ncm红心` / `#ncm取消红心` 带关键词先出候选列表，`#ncm听N` 再执行对应动作（一次性，用完恢复播放）；不带关键词复用当前会话候选列表。`#ncm播放` / `#ncm相似歌单` 保持原有行为。
+- **aiocqhttp（OneBot/napcat）语音与文件直发适配**：napcat 与 AstrBot 跨容器不共享文件系统时，语音自动经 ffmpeg→24kHz wav→pysilk 编成标准 silk（几 MB）直发、文件以 base64 内联直发，无需共享挂载；无损/大文件先压成紧凑 mp3 控制载荷。
+
+### 🐛 修复与优化
+
+- **Playwright 缺系统库自愈 + 阿里源**：容器缺 Chromium 系统库（`libnspr4.so` 等）时自动把官方 apt 源切换为阿里镜像并执行 `playwright install-deps chromium`（幂等、备份 .bak、仅动官方域名）；失败时日志给出可直接执行的安装命令。
+- `metadata.yaml` 补充 `category` 分类字段。
+
 ## [v1.1.4] - 2026-08-18
 
 ### 🐛 修复与优化

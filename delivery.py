@@ -33,6 +33,113 @@ def _is_weixin_oc(event) -> bool:
     return "weixin_oc" in _platform_name(event)
 
 
+def _is_aiocqhttp(event) -> bool:
+    return "aiocqhttp" in _platform_name(event)
+
+
+def _file_to_base64(path: str) -> str:
+    import base64
+
+    with open(path, "rb") as f:
+        return base64.b64encode(f.read()).decode("ascii")
+
+
+def _bytes_to_base64(data: bytes) -> str:
+    import base64
+
+    return base64.b64encode(data).decode("ascii")
+
+
+async def _aiocq_call_action(event, action: str, sid: int, segs: list) -> None:
+    """aiocqhttp 直连 OneBot call_action 发送原始消息段。
+
+    bot 实例来自 event.bot（CQHttp）；napcat 与 AstrBot 跨容器时 file:// 路径
+    不可见（realpath ENOENT），且 File/Record 组件对 base64:// 有各自的坑
+    （File 擦空不存在路径、Record 强制转 WAV），因此走底层 action 直发 base64。
+    """
+    bot = getattr(event, "bot", None)
+    if bot is None:
+        bot = getattr(getattr(event, "platform", None), "bot", None)
+    if bot is None:
+        raise RuntimeError("无法获取 aiocqhttp bot 实例")
+    is_group = action == "send_group_msg"
+    if is_group:
+        await bot.call_action(action, group_id=int(sid), message=segs)
+    else:
+        await bot.call_action(action, user_id=int(sid), message=segs)
+
+
+async def _aiocq_send_file(event, text: str, display: str, path: str) -> None:
+    """aiocqhttp 发送文件：无损/大文件已由调用方压成 mp3，这里 base64 内联直发。"""
+    b64 = await asyncio.to_thread(_file_to_base64, path)
+    segs: list = []
+    if text:
+        segs.append({"type": "text", "data": {"text": text}})
+    segs.append({"type": "file", "data": {"file": f"base64://{b64}", "name": display}})
+    is_group = bool(getattr(event.message_obj, "group_id", None))
+    sid = event.message_obj.group_id if is_group else event.get_sender_id()
+    await _aiocq_call_action(event, "send_group_msg" if is_group else "send_private_msg", int(sid), segs)
+
+
+async def _aiocq_send_silk_record(event, text: str, src_path: str) -> tuple[bool, str]:
+    """aiocqhttp 语音：无损→24kHz 单声道 wav→pysilk 编成 Tencent silk，base64 直发。
+
+    Record 组件会把音频转 WAV 再 base64（载荷 ~50MB+，napcat 转码数分钟→WS 超时）；
+    silk 仅几 MB，napcat 无需转码直接上传。任何一步失败返回 (False, 原因)，由调用方
+    退回标准 Record 组件发送。
+    """
+    ffmpeg = _ffmpeg_path()
+    if not ffmpeg:
+        return False, "no_ffmpeg"
+    try:
+        import pysilk
+    except Exception:
+        return False, "no_pysilk"
+    import wave as _wave
+    from io import BytesIO as _BytesIO
+
+    tmp = os.path.join(os.path.dirname(src_path), f"silk_{int(time.time() * 1000)}")
+    wav_path = tmp + ".wav"
+    silk_path = tmp + ".silk"
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            ffmpeg, "-y", "-i", src_path, "-ar", "24000", "-ac", "1", "-f", "wav", wav_path,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        rc = await proc.wait()
+        if rc != 0 or not os.path.exists(wav_path):
+            return False, "ffmpeg_wav_fail"
+        with _wave.open(wav_path, "rb") as wav:
+            rate = wav.getframerate()
+            pcm = wav.readframes(wav.getnframes())
+        out = _BytesIO()
+        # OneBot/napcat 用标准 silk（#!SILK_V3）；tencent=True 会加 0x02 前缀，
+        # 那是 QQ 官方 API 专用，napcat 解析会错（语音只剩 1 秒）
+        pysilk.encode(_BytesIO(pcm), out, rate, rate, tencent=False)
+        silk_bytes = out.getvalue()
+        segs: list = []
+        if text:
+            segs.append({"type": "text", "data": {"text": text}})
+        # silk 直接来自内存，无需先落盘再读
+        segs.append(
+            {"type": "record", "data": {"file": f"base64://{_bytes_to_base64(silk_bytes)}"}}
+        )
+        is_group = bool(getattr(event.message_obj, "group_id", None))
+        sid = event.message_obj.group_id if is_group else event.get_sender_id()
+        await _aiocq_call_action(event, "send_group_msg" if is_group else "send_private_msg", int(sid), segs)
+        return True, ""
+    except Exception as e:
+        return False, f"{type(e).__name__}: {e}"
+    finally:
+        for p in (wav_path, silk_path):
+            try:
+                if os.path.exists(p):
+                    os.remove(p)
+            except Exception:
+                pass
+
+
 def _qq_official_chunked_upload_supported(astrbot_version: str | None = None) -> bool:
     """AstrBot ≥ 4.27.3 的 QQ 官方适配器对本地大文件自动走分片上传。
 
@@ -236,6 +343,7 @@ async def _deliver_local_audio(
     cfg: dict,
     is_qqoff: bool,
     is_wxoc: bool,
+    is_aiocq: bool = False,
     title: str,
     singer: str,
     local_path: str,
@@ -278,10 +386,29 @@ async def _deliver_local_audio(
     )
     compress_bitrate = max(32, int(cfg.get("compressBitrate") or 128))
 
+    # aiocqhttp(napcat)：跨容器不共享文件系统，file:// 路径不可见(ENOENT)；
+    # Record 组件强制转 WAV+base64（载荷大→napcat 转码慢→WS 超时）。因此无损/过大
+    # 音频先压成紧凑 mp3，语音走 silk、文件走 base64 内联直发（见 _aiocq_*）。
+    aiocq_compact = None
+    if is_aiocq and ffmpeg_compress:
+        lossless_or_big = ext.lower() in (".flac", ".wav", ".ogg", ".m4a") or file_size > 8 * 1024 * 1024
+        if lossless_or_big:
+            aiocq_compact = await _compress_to_mp3(local_path, compress_bitrate)
+            if aiocq_compact:
+                plugin._log_warn(
+                    f"aiocqhttp 无损/大文件已压成紧凑 mp3：{title} - {singer} {ext} 约 "
+                    f"{file_size / 1024 / 1024:.1f}MB"
+                )
+
     # 文件通道候选：(display, 路径, 已压缩标记)；None = 不发文件
     file_payload = None
     if want_file:
-        if file_blocked:
+        if is_aiocq:
+            # aiocqhttp：文件走 base64 直发，不依赖共享挂载；载荷用压缩 mp3 控制
+            src = aiocq_compact or local_path
+            display = _file_display(".mp3") if aiocq_compact else _file_display()
+            file_payload = (display, src, True)
+        elif file_blocked:
             if ffmpeg_compress:
                 compressed = await _compress_to_mp3(local_path, compress_bitrate)
                 if compressed:
@@ -309,6 +436,10 @@ async def _deliver_local_audio(
         nonlocal pending_text
         display, path, is_compressed = file_payload
         try:
+            if is_aiocq:
+                await _aiocq_send_file(event, pending_text, display, path)
+                pending_text = ""
+                return
             await _send_media(File(display, file=path))
             pending_text = ""
             return
@@ -330,16 +461,28 @@ async def _deliver_local_audio(
 
     try:
         if want_vocal:
-            try:
-                await _send_media(Record.fromFileSystem(local_path))
-                pending_text = ""
-            except Exception as e:
-                plugin._log_warn(f"语音发送失败{'（QQ 官方）' if is_qqoff else ''}: {e}")
+            voice_path = aiocq_compact or local_path
+            silk_ok = False
+            if is_aiocq:
+                ok, reason = await _aiocq_send_silk_record(event, pending_text, voice_path)
+                silk_ok = ok
+                if ok:
+                    pending_text = ""
+                else:
+                    plugin._log_warn(f"aiocqhttp 语音 silk 直发失败（{reason}），退回 Record 组件")
+            if not silk_ok:
+                try:
+                    await _send_media(Record.fromFileSystem(voice_path))
+                    pending_text = ""
+                except Exception as e:
+                    plugin._log_warn(f"语音发送失败{'（QQ 官方）' if is_qqoff else ''}: {e}")
         if file_payload:
             await _send_file_payload()
     finally:
         _schedule_cleanup(local_path, keep_sec)
-        if file_payload and file_payload[1] != local_path:
+        if aiocq_compact and aiocq_compact != local_path:
+            _schedule_cleanup(aiocq_compact, keep_sec)
+        if file_payload and file_payload[1] not in (local_path, aiocq_compact):
             _schedule_cleanup(file_payload[1], keep_sec)
 
     if pending_text:
@@ -369,6 +512,7 @@ async def deliver_song(
 
     is_qqoff = _is_qqofficial(event) and cfg.get("qqofficialAdapt", True) is not False
     is_wxoc = _is_weixin_oc(event)
+    is_aiocq = _is_aiocqhttp(event)
 
     # QQ 官方无 OneBot send_api，原生音乐卡本是 no-op，显式跳过避免误导
     allow_native = (not skip_native) and cfg.get("sendNativeCard") and not is_qqoff and not is_wxoc
@@ -420,6 +564,7 @@ async def deliver_song(
         cfg=cfg,
         is_qqoff=is_qqoff,
         is_wxoc=is_wxoc,
+        is_aiocq=is_aiocq,
         title=title,
         singer=singer,
         local_path=local_path,
