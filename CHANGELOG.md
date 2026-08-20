@@ -1,5 +1,16 @@
 # 更新日志
 
+## [v1.1.6] - 2026-08-20
+
+### ✨ 新功能
+
+- **渲染模块独立 `render.py`**：渲染逻辑收敛进独立 `render.py`，`main.py` 仅负责调用与落盘。
+- **跨平台 Playwright 三步运行时就绪**：渲染前主动按序完成——① 确保 playwright Python 包（缺失自动 pip 装清华镜像，装不到位终止）→ ② 仅 Linux：切阿里 apt 源并 `playwright install-deps` 装系统运行库 → ③ 下载 Chromium 二进制（npmmirror 加速）。幂等，首次执行一次后跳过。
+
+### 🐛 修复与优化
+
+- **Linux 识别**：apt 换源 / install-deps 仅在 `platform.system()=="Linux"` 时执行，Windows/macOS 一律跳过，不触碰系统配置。
+
 ## [v1.1.5] - 2026-08-20
 
 ### ✨ 新功能

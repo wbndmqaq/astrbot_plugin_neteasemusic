@@ -79,67 +79,6 @@ def _collect_message_text(event: AstrMessageEvent) -> str:
     return "\n".join(p for p in parts if p)
 
 
-def _switch_apt_to_aliyun():
-    """Debian/Ubuntu 容器下把官方 apt 源换成阿里镜像，加速 install-deps 下载。
-
-    仅当存在 apt-get 且源文件指向官方域名时才改写（幂等，不覆盖用户自选镜像），
-    首次改写前备份为 .bak；任何失败只记日志不影响后续。返回是否发生了改动。
-    """
-
-    import glob
-    import shutil
-
-    if not shutil.which("apt-get"):
-        return False
-    targets = ["/etc/apt/sources.list"]
-    targets += glob.glob("/etc/apt/sources.list.d/*.sources")
-    mapping = [
-        ("http://deb.debian.org/debian", "http://mirrors.aliyun.com/debian"),
-        ("https://deb.debian.org/debian", "http://mirrors.aliyun.com/debian"),
-        ("http://security.debian.org/debian-security", "http://mirrors.aliyun.com/debian-security"),
-        ("https://security.debian.org/debian-security", "http://mirrors.aliyun.com/debian-security"),
-        ("http://archive.ubuntu.com/ubuntu", "http://mirrors.aliyun.com/ubuntu"),
-        ("https://archive.ubuntu.com/ubuntu", "http://mirrors.aliyun.com/ubuntu"),
-        ("http://security.ubuntu.com/ubuntu", "http://mirrors.aliyun.com/ubuntu"),
-        ("https://security.ubuntu.com/ubuntu", "http://mirrors.aliyun.com/ubuntu"),
-    ]
-    changed = False
-    for path in targets:
-        if not os.path.exists(path):
-            continue
-        try:
-            with open(path, "r", encoding="utf-8", errors="ignore") as f:
-                content = f.read()
-        except Exception:
-            content = None
-        if content is None:
-            continue
-        new_content = content
-        for old, new in mapping:
-            if old in new_content:
-                new_content = new_content.replace(old, new)
-        if new_content == content:
-            continue
-        bak = path + ".bak"
-        try:
-            if not os.path.exists(bak):
-                with open(bak, "w", encoding="utf-8") as f:
-                    f.write(content)
-            with open(path, "w", encoding="utf-8") as f:
-                f.write(new_content)
-        except Exception as e:
-            logger.warning(f"[neteasemusic] apt 源改写失败 {path}: {e}")
-            continue
-        changed = True
-        logger.info(f"[neteasemusic] apt 源 {path} 已切换阿里镜像（原文件备份为 {bak}）")
-    if changed:
-        try:
-            subprocess.run(["apt-get", "update"], capture_output=True, text=True, check=False, timeout=300)
-        except Exception as e:
-            logger.warning(f"[neteasemusic] apt-get update 失败: {e}")
-    return changed
-
-
 class NeteaseMusicPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -452,96 +391,15 @@ class NeteaseMusicPlugin(Star):
     # ──────────── 卡片渲染 ────────────
 
     async def _render_card(self, event: AstrMessageEvent, data: dict, tpl_name: str) -> str | None:
-
         try:
-            import jinja2
-            from playwright.async_api import async_playwright
-
-            from .tpl_adapter import get_jinja_template
+            from .render import render_card_png
 
             tmpl_path = os.path.join(PLUGIN_DIR, "resources", "html", tpl_name, f"{tpl_name}.html")
             if not os.path.exists(tmpl_path):
                 return None
-            tmpl = get_jinja_template(tmpl_path)
-            html = jinja2.Template(tmpl).render(data=data)
-            async with async_playwright() as p:
-                launch_args = [
-                    "--no-sandbox",
-                    "--disable-setuid-sandbox",
-                    "--disable-dev-shm-usage",
-                    "--disable-gpu",
-                ]
-                try:
-                    browser = await p.chromium.launch(args=launch_args)
-                except Exception as e:
-                    err_msg = str(e)
-                    if "Executable doesn't exist" in err_msg or "playwright install" in err_msg:
-                        logger.warning("[neteasemusic] 未找到 Playwright Chromium，正在尝试通过 npmmirror 镜像源自动下载安装...")
-                        def _install():
-                            cmd = [sys.executable, "-m", "playwright", "install", "chromium"]
-                            env = os.environ.copy()
-                            env["PLAYWRIGHT_DOWNLOAD_HOST"] = "https://npmmirror.com/mirrors/playwright/"
-                            subprocess.run(cmd, capture_output=True, text=True, env=env, check=True)
-                        await asyncio.to_thread(_install)
-                        browser = await p.chromium.launch(args=launch_args)
-                    elif "error while loading shared libraries" in err_msg or "shared object file" in err_msg:
-                        # 二进制已下载但容器缺系统运行库（libnspr4/libnss3 等）。
-                        # playwright install 只下载二进制、不装 OS 包；这里尝试 install-deps
-                        # （需 apt + root），失败则给出可直接执行的安装命令而非含糊报错。
-                        logger.warning("[neteasemusic] Chromium 缺少系统运行库，尝试执行 playwright install-deps 自动安装...")
-                        def _install_deps():
-                            # 先切阿里 apt 源再装，避免官方源下载慢/超时
-                            _switch_apt_to_aliyun()
-                            cmd = [sys.executable, "-m", "playwright", "install-deps", "chromium"]
-                            env = os.environ.copy()
-                            env["PLAYWRIGHT_DOWNLOAD_HOST"] = "https://npmmirror.com/mirrors/playwright/"
-                            return subprocess.run(cmd, capture_output=True, text=True, env=env, check=False)
-                        res = await asyncio.to_thread(_install_deps)
-                        if res.returncode == 0:
-                            logger.info("[neteasemusic] playwright install-deps 完成，重新启动浏览器...")
-                            browser = await p.chromium.launch(args=launch_args)
-                        else:
-                            hint = (
-                                "请在容器内以 root 执行：\n"
-                                "python -m playwright install-deps chromium\n"
-                                "或手动：apt-get update && apt-get install -y libnspr4 libnss3 "
-                                "libx11-xcb1 libxcb1 libxcomposite1 libxdamage1 libxfixes3 "
-                                "libxrandr2 libgbm1 libasound2 libatk1.0-0 libatk-bridge2.0-0 "
-                                "libcairo2 libcups2 libdrm2 libxkbcommon0 libxext6 libpango-1.0-0"
-                            )
-                            logger.error(
-                                f"[neteasemusic] 自动安装系统依赖失败，请手动安装后重试：\n{hint}\n\n安装输出：\n{res.stdout[-2000:]}\n{res.stderr[-2000:]}"
-                            )
-                            raise
-                    else:
-                        raise e
-                try:
-                    page = await browser.new_page(
-                        viewport={"width": 640, "height": 800},
-                        device_scale_factor=2,  # 2x 清晰度
-                    )
-                    await page.set_content(html, wait_until="load", timeout=30000)
-                    try:
-                        await page.wait_for_load_state("networkidle", timeout=8000)
-                    except Exception:
-                        pass
-                    # 收缩视口到 .page 实际渲染边界：viewport 固定时 body 不会随
-                    # fit-content 收缩，截图右侧/底部会留大片浅红空白（白边）
-                    try:
-                        rect = await page.evaluate(
-                            "() => { const el = document.querySelector('.page') || document.body; "
-                            "const r = el.getBoundingClientRect(); "
-                            "return { w: Math.max(1, Math.ceil(r.right)), "
-                            "h: Math.max(1, Math.ceil(r.bottom)) }; }"
-                        )
-                        await page.set_viewport_size({"width": rect["w"], "height": rect["h"]})
-                        await page.wait_for_timeout(50)
-                    except Exception:
-                        pass
-                    # png 截图不支持 quality 参数（playwright 限制）
-                    raw = await page.screenshot(full_page=True, type="png")
-                finally:
-                    await browser.close()
+            raw = await render_card_png(tmpl_path, data)
+            if raw is None:
+                return None
             from .delivery import get_temp_dir
 
             d = get_temp_dir(self._cfg(), PLUGIN_DIR)
