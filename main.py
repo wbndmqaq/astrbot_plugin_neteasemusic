@@ -5,8 +5,6 @@ import json
 import os
 import random
 import re
-import subprocess
-import sys
 import time
 from pathlib import Path
 
@@ -24,6 +22,9 @@ from .quality import QUALITY_LABEL
 PLUGIN_DIR = str(Path(__file__).resolve().parent)
 
 NEW_SONG_AREAS = {"华语": 7, "欧美": 96, "日本": 8, "韩国": 16}
+
+# #ncm听所有 连播上限（防止误触发刷屏/大量下载）
+_PLAY_ALL_LIMIT = 30
 
 
 def _is_plugin_command_msg(msg: str) -> bool:
@@ -60,6 +61,12 @@ def _collect_message_text(event: AstrMessageEvent) -> str:
                     parts.append(str(t))
             elif seg_type in ("Image", "File", "Record", "Video", "Face"):
                 continue
+            elif seg_type == "Json":
+                # OneBot json 段（音乐分享卡片）：适配器不写入 message_str，
+                # 必须从组件 data 里取 ark JSON，否则分享卡永远解析不到
+                d = getattr(seg, "data", None)
+                if d:
+                    parts.append(str(d))
             else:
                 try:
                     parts.append(json.dumps(seg, ensure_ascii=False, default=str))
@@ -206,30 +213,38 @@ class NeteaseMusicPlugin(Star):
     async def _show_lyric(self, event, song: dict, user_key: str) -> None:
         lr = await ncmapi.lyric(song["id"], user_key=user_key)
         lines = self._extract_lyric_lines(lr.get("lrc") or "", lr.get("tlyric") or "")
-        data = cardlib.build_lyric_card_data(song, lines, line_count=len(lines))
-        await self._reply_card_or_text(
-            event, tpl_name="ncm-lyric", data=data, format_text=lambda d: cardlib.format_lyric_text(song, lines)
-        )
+        if not lines:
+            await self._reply(event, "暂无歌词")
+            return
+        await self._send_lyric_pages(event, song, lines, base_tip="歌词来自网易云音乐")
 
     async def _show_lyric_word(self, event, song: dict, user_key: str) -> None:
         lr = await ncmapi.lyric_new(song["id"], user_key=user_key)
-        yrc = lr.get("yrc") or ""
-        lines = []
-        if yrc:
-            for l in yrc.splitlines():
-                t = re.sub(r"\[[\d,]+\]", "", l).strip()
-                if t:
-                    lines.append(t)
-                if len(lines) >= 30:
-                    break
+        lines = self._extract_yrc_lines(lr.get("yrc") or "")
         if not lines:
-            await self._reply(event, "该歌曲暂无逐字歌词")
+            # 无逐字歌词时退回普通歌词，避免只给一句死提示
+            await self._reply(event, "该歌曲暂无逐字歌词，已改为显示普通歌词")
+            await self._show_lyric(event, song, user_key)
             return
-        data = cardlib.build_lyric_card_data(song, lines, line_count=len(lines))
-        data["tip"] = "逐字歌词来自网易云音乐"
-        await self._reply_card_or_text(
-            event, tpl_name="ncm-lyric", data=data, format_text=lambda d: cardlib.format_lyric_text(song, lines)
-        )
+        await self._send_lyric_pages(event, song, lines, base_tip="逐字歌词来自网易云音乐")
+
+    async def _send_lyric_pages(self, event, song: dict, lines: list, *, base_tip: str) -> None:
+        """歌词分页发送：每页最多 36 行，分多张卡片完整展示（不再截断）。"""
+        pages = [lines[i : i + 36] for i in range(0, len(lines), 36)]
+        total = len(lines)
+        for pi, page_lines in enumerate(pages):
+            data = cardlib.build_lyric_card_data(song, page_lines, line_count=total)
+            data["tip"] = (
+                f"{base_tip} · 第 {pi + 1}/{len(pages)} 页" if len(pages) > 1 else base_tip
+            )
+            ok = await self._reply_card_or_text(
+                event,
+                tpl_name="ncm-lyric",
+                data=data,
+                format_text=lambda d: cardlib.format_lyric_text(song, d.get("lines") or []),
+            )
+            if not ok:
+                break
 
     async def _show_comment(self, event, song: dict, user_key: str) -> None:
         comments = await ncmapi.comment(song["id"], limit=20, user_key=user_key)
@@ -388,6 +403,91 @@ class NeteaseMusicPlugin(Star):
         await self._reply(event, text())
         return True
 
+    async def _playlist_list_to_session(self, event, title: str, pls: list, *, subtitle: str = "") -> bool:
+        """歌单候选列表写入会话（#ncm听N 展开曲目），并渲染 ncm-playlist 卡片。"""
+        scope = self._scope(event)
+        await cardlib.SessionStore.set(self, scope, {"type": "playlistList", "keyword": title, "data": pls})
+        tip = "回复 #ncm听N 查看该歌单曲目"
+        data = cardlib.build_playlist_card_data(title, pls, subtitle=subtitle, tip=tip, cfg=self._cfg())
+        return await self._reply_card_or_text(
+            event,
+            tpl_name="ncm-playlist",
+            data=data,
+            format_text=lambda d: cardlib.format_playlist_text(title, pls, tip=tip),
+        )
+
+    async def _album_list_to_session(self, event, title: str, albums: list) -> bool:
+        """专辑候选列表写入会话（#ncm听N 展开曲目），并渲染 ncm-generic 卡片。"""
+        scope = self._scope(event)
+        await cardlib.SessionStore.set(self, scope, {"type": "albumList", "keyword": title, "data": albums})
+        tip = "回复 #ncm听N 查看该专辑曲目"
+        items = [
+            {"name": a.get("name") or "", "sub": a.get("artist") or "", "tag": f"{a.get('size') or a.get('trackCount') or '?'}首" if (a.get("size") or a.get("trackCount")) else "", "cover": a.get("cover") or ""}
+            for a in albums
+        ]
+        data = cardlib.build_generic_card_data(title, items, subtitle="专辑候选", tip=tip, cfg=self._cfg())
+        return await self._reply_card_or_text(
+            event,
+            tpl_name="ncm-generic",
+            data=data,
+            format_text=lambda d: cardlib.format_generic_text(title, items, tip=tip),
+        )
+
+    async def _expand_playlist(self, event, session: dict, n: int) -> None:
+        pls = session.get("data") or []
+        if n < 1 or n > len(pls):
+            await self._reply(event, f"序号超出范围（1-{len(pls)}）")
+            event.stop_event()
+            return
+        p = pls[n - 1]
+        try:
+            songs = await ncmapi.playlist_tracks(p["id"], user_key=self._user_key(event))
+        except ApiError as err:
+            self._log_warn(f"歌单展开失败: {err}")
+            await self._reply(event, f"歌单展开失败：{err}")
+            event.stop_event()
+            return
+        if not songs:
+            await self._reply(event, f"歌单「{p['name']}」暂无曲目")
+            event.stop_event()
+            return
+        shown = songs[:30]
+        await self._list_to_session(
+            event,
+            f"歌单 · {p['name']}",
+            shown,
+            tip=f"歌单共 {len(songs)} 首，显示前 {len(shown)} 首；回复 #ncm听N 播放，#ncm听所有 连播",
+        )
+        event.stop_event()
+
+    async def _expand_album(self, event, session: dict, n: int) -> None:
+        albums = session.get("data") or []
+        if n < 1 or n > len(albums):
+            await self._reply(event, f"序号超出范围（1-{len(albums)}）")
+            event.stop_event()
+            return
+        a = albums[n - 1]
+        try:
+            album_info, songs = await ncmapi.album_detail(a["id"], user_key=self._user_key(event))
+        except ApiError as err:
+            self._log_warn(f"专辑展开失败: {err}")
+            await self._reply(event, f"专辑展开失败：{err}")
+            event.stop_event()
+            return
+        info = album_info or {}
+        name = info.get("name") or a.get("name") or "专辑"
+        if not songs:
+            await self._reply(event, f"专辑「{name}」暂无曲目")
+            event.stop_event()
+            return
+        await self._list_to_session(
+            event,
+            f"专辑 · {name}",
+            songs,
+            tip=f"歌手：{info.get('artist') or ''} · 共 {len(songs)} 首；回复 #ncm听N 播放，#ncm听所有 连播整张专辑",
+        )
+        event.stop_event()
+
     # ──────────── 卡片渲染 ────────────
 
     async def _render_card(self, event: AstrMessageEvent, data: dict, tpl_name: str) -> str | None:
@@ -503,8 +603,19 @@ class NeteaseMusicPlugin(Star):
         n = int(m.group(1) or m.group(2) or 0) if m else 0
         scope = self._scope(event)
         session = await cardlib.SessionStore.get(self, scope)
-        if not session or session.get("type") != "songs" or not session.get("data"):
+        if not session or not session.get("data"):
             # 无本插件会话时不抢其它插件的 #听
+            return
+        stype = session.get("type")
+        if stype == "albumList":
+            # 专辑候选会话：展开所选专辑曲目
+            await self._expand_album(event, session, n)
+            return
+        if stype == "playlistList":
+            # 歌单候选会话：展开所选歌单曲目
+            await self._expand_playlist(event, session, n)
+            return
+        if stype != "songs":
             return
         songs = session.get("data") or []
         if n < 1 or n > len(songs):
@@ -544,6 +655,63 @@ class NeteaseMusicPlugin(Star):
             await self._reply(event, f"操作失败：{err}")
         event.stop_event()
 
+    @filter.regex(re.compile(r"^#?(?:ncm|NCM)\s*听\s*所有$|^#\s*听\s*所有$", re.IGNORECASE))
+    async def play_all(self, event: AstrMessageEvent):
+        """#ncm听所有：依次发送当前会话列表的全部歌曲（语音+文件，上限 30 首）"""
+        cfg = self._cfg()
+        if not cfg.get("enable", True) or cfg.get("enableSongRequest") is False:
+            return
+        if not re.match(
+            r"^#?(?:ncm|NCM)\s*听\s*所有$|^#\s*听\s*所有$",
+            event.message_str.strip(),
+            re.IGNORECASE,
+        ):
+            return
+        scope = self._scope(event)
+        session = await cardlib.SessionStore.get(self, scope)
+        if not session or session.get("type") != "songs" or not session.get("data"):
+            # 无本插件会话时不抢其它插件的 #听所有
+            return
+        songs = session.get("data") or []
+        batch = songs[:_PLAY_ALL_LIMIT]
+        title = session.get("keyword") or "当前列表"
+        await self._reply(
+            event,
+            f"▶ 开始连播「{title}」共 {len(batch)} 首"
+            + (f"（列表共 {len(songs)} 首，仅连播前 {_PLAY_ALL_LIMIT} 首）" if len(songs) > len(batch) else "")
+            + "，逐首下载发送需要一些时间…",
+        )
+        ok = fail = 0
+        user_key = self._user_key(event)
+        for i, song in enumerate(batch):
+            try:
+                play = await self._resolve_play(song, cfg, user_key)
+                if not play.get("url"):
+                    fail += 1
+                    self._log_warn(f"连播 {i + 1}/{len(batch)} 无播放链: {song.get('name')}")
+                    continue
+                # 连播不发详情卡/文案/音乐卡，只发语音+文件
+                await deliver_song(
+                    self,
+                    event,
+                    song,
+                    play,
+                    cfg=cfg,
+                    plugin_dir=PLUGIN_DIR,
+                    options={"skipTextInfo": True, "skipNativeCard": True},
+                )
+                ok += 1
+            except ApiError as err:
+                fail += 1
+                self._log_warn(f"连播 {i + 1}/{len(batch)} 失败: {err}")
+            except Exception as err:  # noqa: BLE001  # 单曲失败不中断连播
+                fail += 1
+                self._log_warn(f"连播 {i + 1}/{len(batch)} 失败: {type(err).__name__}: {err}")
+            if i < len(batch) - 1:
+                await asyncio.sleep(1)
+        await self._reply(event, f"连播完成：成功 {ok} 首，失败 {fail} 首")
+        event.stop_event()
+
     @filter.regex(re.compile(r"^#?(ncm|NCM)\s*播放\s*(.+)$", re.IGNORECASE))
     async def play_direct(self, event: AstrMessageEvent):
         """#ncm播放 关键词：搜索并直接播放第一首"""
@@ -578,28 +746,81 @@ class NeteaseMusicPlugin(Star):
         event.stop_event()
 
     @staticmethod
-    def _extract_lyric_lines(lrc: str, tlyric: str = "", max_lines: int = 36) -> list:
-        def _strip_meta(lines):
-            return [l for l in lines if not re.match(r"^\s*\[(ti|ar|al|by|offset|total):", l, re.IGNORECASE)]
+    def _extract_lyric_lines(lrc: str, tlyric: str = "") -> list:
+        """LRC 文本 → 纯文本行，完整返回（分页由调用方处理）。
 
-        out = []
-        for l in _strip_meta(lrc.splitlines()):
-            t = re.sub(r"^\[[^\]]*\]", "", l).strip()
-            if t:
-                out.append(t)
-            if len(out) >= max_lines:
-                break
+        兼容两种格式：传统 ``[mm:ss.xx]歌词`` 与新版 JSON 行
+        ``{"t":1000,"c":[{"tx":"作词: "},...]}``（部分歌曲的 lrc/yrc 为该格式）。
+        """
+
+        def _parse_line(line: str) -> str:
+            line = line.strip()
+            if line.startswith("{") and line.endswith("}"):
+                try:
+                    obj = json.loads(line)
+                    parts = [
+                        c.get("tx", "") for c in (obj.get("c") or []) if isinstance(c, dict)
+                    ]
+                    return "".join(str(p) for p in parts).strip()
+                except Exception:
+                    return ""
+            return re.sub(r"^\[[^\]]*\]", "", line).strip()
+
+        def _clean(raw: str) -> list:
+            out = []
+            for l in raw.splitlines():
+                t = _parse_line(l)
+                if t and not re.match(
+                    r"^\s*\[(ti|ar|al|by|offset|total):", l, re.IGNORECASE
+                ):
+                    out.append(t)
+            return out
+
+        out = _clean(lrc)
         if tlyric:
             tr = []
-            for l in _strip_meta(tlyric.splitlines())[:12]:
-                t = re.sub(r"^\[[^\]]*\]", "", l).strip()
+            for l in tlyric.splitlines():
+                t = _parse_line(l)
                 if t:
                     tr.append(t)
+                if len(tr) >= 12:
+                    break
             if tr:
                 out.append("")
                 out.append("── 翻译 ──")
                 out.extend(tr)
-        return out[:40]
+        return out
+
+    @staticmethod
+    def _extract_yrc_lines(yrc: str, max_lines: int = 72) -> list:
+        """逐字歌词（yrc）→ 纯文本行。
+
+        兼容两种格式：JSON 行 ``{"t":..,"c":[{"tx":..},..]}``（当前主流）与
+        旧版逐字时间戳 ``[start,dur,0](start,dur,0)字(...)``。
+        """
+        out = []
+        for line in (yrc or "").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            text = ""
+            if line.startswith("{") and line.endswith("}"):
+                try:
+                    obj = json.loads(line)
+                    parts = [
+                        c.get("tx", "") for c in (obj.get("c") or []) if isinstance(c, dict)
+                    ]
+                    text = "".join(str(p) for p in parts).strip()
+                except Exception:
+                    text = ""
+            else:
+                text = re.sub(r"^\[[^\]]*\]", "", line)
+                text = re.sub(r"\([^)]*\)", "", text).strip()
+            if text:
+                out.append(text)
+            if len(out) >= max_lines:
+                break
+        return out
 
     @filter.regex(re.compile(r"^#?(ncm|NCM)\s*热搜$", re.IGNORECASE))
     async def hot_search(self, event: AstrMessageEvent):
@@ -743,7 +964,7 @@ class NeteaseMusicPlugin(Star):
 
     @filter.regex(re.compile(r"^#?(ncm|NCM)\s*专辑\s+(.+)$", re.IGNORECASE))
     async def album(self, event: AstrMessageEvent):
-        """#ncm专辑 关键词：专辑曲目"""
+        """#ncm专辑 关键词：搜索专辑出候选列表，回复 #ncm听N 查看曲目"""
         m = self._cmd(event, r"^#?(?:ncm|NCM)\s*专辑\s+(.+)$")
         if not m:
             return
@@ -751,24 +972,28 @@ class NeteaseMusicPlugin(Star):
 
         user_key = self._user_key(event)
         try:
-            albums = await ncmapi.search_albums(kw, limit=5, user_key=user_key)
+            albums = await ncmapi.search_albums(kw, limit=8, user_key=user_key)
             if not albums:
                 await self._reply(event, f"没有搜到专辑「{kw}」")
                 event.stop_event()
                 return
-            a = albums[0]
-            album_info, songs = await ncmapi.album_detail(a["id"], user_key=user_key)
-            if not songs:
-                await self._reply(event, f"专辑「{a['name']}」暂无曲目")
-                event.stop_event()
-                return
-            info = album_info or {}
-            await self._list_to_session(
-                event,
-                f"专辑 · {info.get('name') or a['name']}",
-                songs,
-                tip=f"歌手：{info.get('artist') or ''} · 共 {len(songs)} 首",
-            )
+            if len(albums) == 1:
+                # 仅一个结果：直接展开，省一次交互
+                a = albums[0]
+                album_info, songs = await ncmapi.album_detail(a["id"], user_key=user_key)
+                info = album_info or {}
+                if songs:
+                    await self._list_to_session(
+                        event,
+                        f"专辑 · {info.get('name') or a['name']}",
+                        songs,
+                        tip=f"歌手：{info.get('artist') or ''} · 共 {len(songs)} 首；回复 #ncm听N 播放，#ncm听所有 连播整张专辑",
+                    )
+                    event.stop_event()
+                    return
+            # 多结果（或首选无曲目）：给候选列表让用户选，避免同名专辑选错
+            title = f"「{kw}」的专辑候选"
+            await self._album_list_to_session(event, title, albums)
         except ApiError as err:
             self._log_warn(f"专辑失败: {err}")
             await self._reply(event, f"获取专辑失败：{err}")
@@ -776,7 +1001,7 @@ class NeteaseMusicPlugin(Star):
 
     @filter.regex(re.compile(r"^#?(ncm|NCM)\s*歌单\s+(.+)$", re.IGNORECASE))
     async def playlist(self, event: AstrMessageEvent):
-        """#ncm歌单 关键词：歌单曲目"""
+        """#ncm歌单 关键词：搜索歌单出候选列表，回复 #ncm听N 查看曲目"""
         m = self._cmd(event, r"^#?(?:ncm|NCM)\s*歌单\s+(.+)$")
         if not m:
             return
@@ -784,20 +1009,27 @@ class NeteaseMusicPlugin(Star):
 
         user_key = self._user_key(event)
         try:
-            pls = await ncmapi.search_playlists(kw, limit=5, user_key=user_key)
+            pls = await ncmapi.search_playlists(kw, limit=10, user_key=user_key)
             if not pls:
                 await self._reply(event, f"没有搜到歌单「{kw}」")
                 event.stop_event()
                 return
-            p = pls[0]
-            songs = await ncmapi.playlist_tracks(p["id"], user_key=user_key)
-            if not songs:
-                await self._reply(event, f"歌单「{p['name']}」暂无曲目")
-                event.stop_event()
-                return
-            shown = songs[:30]
-            await self._list_to_session(
-                event, f"歌单 · {p['name']}", shown, tip=f"歌单共 {len(songs)} 首，显示前 {len(shown)} 首"
+            if len(pls) == 1:
+                p = pls[0]
+                songs = await ncmapi.playlist_tracks(p["id"], user_key=user_key)
+                if songs:
+                    shown = songs[:30]
+                    await self._list_to_session(
+                        event,
+                        f"歌单 · {p['name']}",
+                        shown,
+                        tip=f"歌单共 {len(songs)} 首，显示前 {len(shown)} 首；回复 #ncm听N 播放，#ncm听所有 连播",
+                    )
+                    event.stop_event()
+                    return
+            # 多结果（或首选无曲目）：候选列表可选，解决同名歌单自动选错的问题
+            await self._playlist_list_to_session(
+                event, f"「{kw}」的歌单候选", pls, subtitle="同名/相似歌单较多时在此挑选"
             )
         except ApiError as err:
             self._log_warn(f"歌单失败: {err}")
@@ -843,17 +1075,8 @@ class NeteaseMusicPlugin(Star):
                 await self._reply(event, "该歌单暂无相关推荐")
                 event.stop_event()
                 return
-            data = cardlib.build_playlist_card_data(
-                f"相关歌单 · {pl['name'] or kw}",
-                pls,
-                subtitle="与这个歌单相关的推荐",
-                cfg=self._cfg(),
-            )
-            await self._reply_card_or_text(
-                event,
-                tpl_name="ncm-playlist",
-                data=data,
-                format_text=lambda d: cardlib.format_playlist_text(f"相关歌单 · {pl['name'] or kw}", pls),
+            await self._playlist_list_to_session(
+                event, f"相关歌单 · {pl['name'] or kw}", pls, subtitle="与这个歌单相关的推荐"
             )
         except ApiError as err:
             self._log_warn(f"相关歌单失败: {err}")
@@ -896,17 +1119,11 @@ class NeteaseMusicPlugin(Star):
                 await self._reply(event, "暂无精品歌单数据")
                 event.stop_event()
                 return
-            data = cardlib.build_playlist_card_data(
+            await self._playlist_list_to_session(
+                event,
                 f"精品歌单{f' · {cat}' if cat else ''}",
                 pls,
                 subtitle="精选歌单推荐",
-                cfg=self._cfg(),
-            )
-            await self._reply_card_or_text(
-                event,
-                tpl_name="ncm-playlist",
-                data=data,
-                format_text=lambda d: cardlib.format_playlist_text(f"精品歌单{f' · {cat}' if cat else ''}", pls),
             )
         except ApiError as err:
             self._log_warn(f"精品歌单失败: {err}")
@@ -962,7 +1179,8 @@ class NeteaseMusicPlugin(Star):
                     {"name": b.get("title") or b.get("typeTitle") or "(无标题)", "sub": b.get("url") or ""}
                     for b in items
                 ],
-                subtitle="首页 Banner",
+                subtitle="App 首页 Banner（活动/专辑/歌单推广位）",
+                tip="这是网易云 App 首页的轮播推广图；点击对应条目的链接即可在网页打开查看",
                 cfg=self._cfg(),
             )
             await self._reply_card_or_text(
@@ -975,6 +1193,7 @@ class NeteaseMusicPlugin(Star):
                         {"name": b.get("title") or b.get("typeTitle") or "(无标题)", "sub": b.get("url") or ""}
                         for b in items
                     ],
+                    tip="首页轮播推广位：复制条目链接到浏览器打开查看",
                 ),
             )
         except ApiError as err:
@@ -1028,7 +1247,11 @@ class NeteaseMusicPlugin(Star):
 
     @filter.regex(re.compile(r"^#?(ncm|NCM)\s*相似歌单\s+(.+)$", re.IGNORECASE))
     async def simi_playlist(self, event: AstrMessageEvent):
-        """#ncm相似歌单 关键词|id：相似歌单"""
+        """#ncm相似歌单 关键词：按关键词给出候选歌单列表，回复 #ncm听N 展开曲目
+
+        此前实现是「关键词→歌曲→simi/playlist 接口」，实际返回与关键词无关；
+        改为直接按关键词检索歌单出候选列表，选择后展开曲目并可播放。
+        """
         m = self._cmd(event, r"^#?(?:ncm|NCM)\s*相似歌单\s+(.+)$")
         if not m:
             return
@@ -1036,27 +1259,13 @@ class NeteaseMusicPlugin(Star):
 
         user_key = self._user_key(event)
         try:
-            song = await self._resolve_song(kw, user_key)
-            if not song:
-                await self._reply(event, f"没有搜到「{kw}」")
-                event.stop_event()
-                return
-            pls = await ncmapi.simi_playlists(song["id"], limit=10, user_key=user_key)
+            pls = await ncmapi.search_playlists(kw, limit=10, user_key=user_key)
             if not pls:
-                await self._reply(event, "暂无相似歌单")
+                await self._reply(event, f"没有搜到与「{kw}」相关的歌单")
                 event.stop_event()
                 return
-            data = cardlib.build_playlist_card_data(
-                f"相似歌单 · {song['name'] or kw}",
-                pls,
-                subtitle="与这首歌相似的歌单",
-                cfg=self._cfg(),
-            )
-            await self._reply_card_or_text(
-                event,
-                tpl_name="ncm-playlist",
-                data=data,
-                format_text=lambda d: cardlib.format_playlist_text(f"与「{song['name'] or kw}」相似的歌单", pls),
+            await self._playlist_list_to_session(
+                event, f"与「{kw}」相似的歌单", pls, subtitle="回复 #ncm听N 查看该歌单曲目"
             )
         except ApiError as err:
             self._log_warn(f"相似歌单失败: {err}")
@@ -1309,17 +1518,8 @@ class NeteaseMusicPlugin(Star):
                 await self._reply(event, f"分类「{cat}」暂无歌单数据")
                 event.stop_event()
                 return
-            data = cardlib.build_playlist_card_data(
-                f"歌单榜 · {cat}",
-                pls,
-                subtitle="分类歌单排行榜",
-                cfg=self._cfg(),
-            )
-            await self._reply_card_or_text(
-                event,
-                tpl_name="ncm-playlist",
-                data=data,
-                format_text=lambda d: cardlib.format_playlist_text(f"歌单榜 · {cat}", pls),
+            await self._playlist_list_to_session(
+                event, f"歌单榜 · {cat}", pls, subtitle="分类歌单排行榜"
             )
         except ApiError as err:
             self._log_warn(f"歌单榜失败: {err}")
@@ -1474,17 +1674,8 @@ class NeteaseMusicPlugin(Star):
                 await self._reply(event, "暂无推荐歌单")
                 event.stop_event()
                 return
-            data = cardlib.build_playlist_card_data(
-                "推荐歌单",
-                pls,
-                subtitle="猜你喜欢 · 每日推荐歌单",
-                cfg=self._cfg(),
-            )
-            await self._reply_card_or_text(
-                event,
-                tpl_name="ncm-playlist",
-                data=data,
-                format_text=lambda d: cardlib.format_playlist_text("推荐歌单", pls),
+            await self._playlist_list_to_session(
+                event, "推荐歌单", pls, subtitle="猜你喜欢 · 每日推荐歌单"
             )
         except ApiError as err:
             self._log_warn(f"推荐失败: {err}")
@@ -1636,12 +1827,15 @@ class NeteaseMusicPlugin(Star):
         try:
             songs = await ncmapi.user_cloud(limit=30, user_key=user_key)
             if not songs:
-                await self._reply(event, "云盘暂无歌曲")
+                await self._reply(event, "云盘暂无歌曲（或账号未开通云盘）")
                 event.stop_event()
                 return
             await self._list_to_session(event, "我的云盘", songs[:20])
         except ApiError as err:
             self._log_warn(f"云盘失败: {err}")
+            await self._reply(event, f"获取云盘失败：{err}\n需要先 #ncm登录")
+        except Exception as err:
+            self._log_warn(f"云盘异常: {type(err).__name__}: {err}")
             await self._reply(event, f"获取云盘失败：{err}\n需要先 #ncm登录")
         event.stop_event()
 
@@ -1695,17 +1889,8 @@ class NeteaseMusicPlugin(Star):
                 await self._reply(event, "暂无歌单")
                 event.stop_event()
                 return
-            data = cardlib.build_playlist_card_data(
-                "我的歌单",
-                pls,
-                subtitle="我创建/收藏的歌单",
-                cfg=self._cfg(),
-            )
-            await self._reply_card_or_text(
-                event,
-                tpl_name="ncm-playlist",
-                data=data,
-                format_text=lambda d: cardlib.format_playlist_text("我的歌单", pls),
+            await self._playlist_list_to_session(
+                event, "我的歌单", pls, subtitle="我创建/收藏的歌单"
             )
         except ApiError as err:
             self._log_warn(f"我的歌单失败: {err}")
@@ -2073,16 +2258,26 @@ class NeteaseMusicPlugin(Star):
 
     # ══════════════════ 链接自动解析 ══════════════════
 
-    @filter.regex(re.compile(r"(music\.163\.com|163music\.com|y\.music\.163\.com|163cn\.tv)", re.IGNORECASE))
+    @filter.event_message_type(filter.EventMessageType.ALL, priority=5)
     async def resolve(self, event: AstrMessageEvent):
-        """自动解析：识别网易云链接/卡片（单曲/歌单/专辑）"""
+        """自动解析：识别网易云分享卡片/链接（单曲/歌单/专辑）。
+
+        用全量事件而非 @filter.regex：OneBot json 段（音乐分享卡片）不会写入
+        message_str，regex 过滤器永远匹配不到 → 卡片解析从未触发。
+        """
         cfg = self._cfg()
         if not cfg.get("enable", True) or cfg.get("enableResolve") is False:
+            return
+        # 快速预筛：纯文本先看 message_str，仅当含 Json 组件（分享卡片）才展开全文
+        msg_str = str(event.message_str or "")
+        chain = getattr(getattr(event, "message_obj", None), "message", None) or []
+        has_json = any(type(seg).__name__ == "Json" for seg in chain)
+        if not has_json and not _is_ncm_message(msg_str):
             return
         text = _collect_message_text(event)
         if not _is_ncm_message(text):
             return
-        if _is_plugin_command_msg(event.message_str):
+        if _is_plugin_command_msg(msg_str):
             return
         handled = await self._handle_resolve(event, text)
         if handled:

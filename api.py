@@ -788,7 +788,15 @@ async def daily_signin(type_: int = 0, user_key: str = "") -> dict:
 async def user_cloud(limit: int = 30, user_key: str = "") -> list:
 
     body = await request("/user/cloud", {"limit": limit, "offset": 0}, "get", user_key)
-    songs = (((body or {}).get("data") or {}).get("songs")) or []
+    # data 正常为 dict{songs:[...]}；未登录/异常时可能直接是 list（此前对其调 .get 抛
+    # AttributeError: 'list' object has no attribute 'get'，导致指令报 ":("）
+    data = body.get("data") if isinstance(body, dict) else None
+    if isinstance(data, dict):
+        songs = data.get("songs") or []
+    elif isinstance(data, list):
+        songs = data
+    else:
+        songs = []
     out = []
     for i, s in enumerate(songs):
         if not isinstance(s, dict):

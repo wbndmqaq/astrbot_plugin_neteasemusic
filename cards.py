@@ -500,6 +500,7 @@ def build_help_card_data(version: str = "", cfg: dict | None = None) -> dict:
                 "items": [
                     {"name": "#ncm点歌 关键词", "desc": "搜索并列出歌曲列表", "example": "#ncm点歌 晴天"},
                     {"name": "#ncm听N", "desc": "播放列表第 N 首", "example": "#ncm听1"},
+                    {"name": "#ncm听所有", "desc": "依次连播当前列表全部歌曲（上限 30 首）", "example": "#ncm听所有"},
                     {"name": "#ncm播放 关键词", "desc": "搜索并直接播放第一首", "example": "#ncm播放 晴天"},
                     {"name": "#ncm歌词 关键词", "desc": "获取歌词", "example": "#ncm歌词 晴天"},
                     {"name": "#ncm热搜", "desc": "热搜榜", "example": "#ncm热搜"},
