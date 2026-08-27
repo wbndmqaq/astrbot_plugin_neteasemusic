@@ -500,12 +500,11 @@ class NeteaseMusicPlugin(Star):
             raw = await render_card_png(tmpl_path, data)
             if raw is None:
                 return None
-            from .delivery import get_temp_dir
+            from .delivery import _write_bytes, get_temp_dir
 
             d = get_temp_dir(self._cfg(), PLUGIN_DIR)
             file_path = os.path.join(d, f"card_{tpl_name}_{int(time.time() * 1000)}.png")
-            with open(file_path, "wb") as f:
-                f.write(raw)
+            await asyncio.to_thread(_write_bytes, file_path, raw)
             return file_path
         except Exception as e:
             self._log_warn(f"{tpl_name} 本地渲染失败: {e}")
@@ -545,11 +544,10 @@ class NeteaseMusicPlugin(Star):
             if "," in raw and raw.split(",", 1)[0].startswith("data:"):
                 raw = raw.split(",", 1)[1]
             data = base64.b64decode(raw)
-            from .delivery import get_temp_dir
+            from .delivery import _write_bytes, get_temp_dir
 
             path = os.path.join(get_temp_dir(self._cfg(), PLUGIN_DIR), f"qr_{int(time.time() * 1000)}.png")
-            with open(path, "wb") as f:
-                f.write(data)
+            await asyncio.to_thread(_write_bytes, path, data)
             return path
         except Exception as e:
             self._log_warn(f"保存二维码失败: {e}")

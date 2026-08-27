@@ -205,14 +205,14 @@ async def download_audio(
         ):
             if res.status >= 400:
                 raise RuntimeError(f"下载失败 HTTP {res.status}")
-            with open(file_path, "wb") as f:
-                async for chunk in res.content.iter_chunked(64 * 1024):
-                    if size == 0:
-                        head = chunk[:32].decode("utf-8", errors="ignore").lower()
-                        if "<html" in head or "<!doctype" in head:
-                            raise RuntimeError("下载内容为 HTML，音频链接已失效")
-                    f.write(chunk)
-                    size += len(chunk)
+            data = await res.read()
+            if len(data) < 256:
+                raise RuntimeError("下载内容过小，可能是无效链接")
+            head = data[:32].decode("utf-8", errors="ignore").lower()
+            if "<html" in head or "<!doctype" in head:
+                raise RuntimeError("下载内容为 HTML，音频链接已失效")
+            await asyncio.to_thread(_write_bytes, file_path, data)
+            size = len(data)
         if size < 256:
             raise RuntimeError("下载内容过小，可能是无效链接")
     except Exception:
@@ -223,6 +223,11 @@ async def download_audio(
                 pass
         raise
     return {"filePath": file_path, "size": size}
+
+
+def _write_bytes(path: str, data: bytes):
+    with open(path, "wb") as f:
+        f.write(data)
 
 
 def _schedule_cleanup(file_path: str, keep_sec: int):
