@@ -21,6 +21,7 @@
 - **卡片渲染**：7 套网易云红主题 HTML 卡片（列表/详情/歌词/热搜/评论/帮助/状态），自动裁剪白边
 - **链接自动解析**：发送 `music.163.com` / `163music.com` 分享卡片或链接，自动识别歌曲/歌单/专辑并播放
 - **扫码登录**：`#ncm登录` 生成二维码，轮询自动写入 Cookie，支持多账号（按会话隔离）
+- **高内聚模块化架构**：核心业务服务下沉（`core/`），声明式指令路由按领域拆分（`handlers/`），纯异步无阻塞调度
 - **临时文件自清理**：卡片图、二维码、音频文件发出后自动延时清除，`keepFileSec=0` 即时清除
 
 ---
@@ -277,28 +278,36 @@ QQ 官方机器人接口与 OneBot 差异较大，插件做了专项适配：
 
 ---
 
-## 📁 目录结构
+## 📂 目录结构
 
-```
+```text
 astrbot_plugin_neteasemusic/
-├── main.py                  # Star 主类：#ncm 指令 handler + 辅助方法
-├── api.py                   # NcmApiClient：aiohttp HTTP 客户端 + Cookie 透传 + 归一化
-├── quality.py               # 网易云音质阶梯与标签
-├── delivery.py              # 音频下载 → Record/File 投递（含 QQ 官方适配）
-├── cards.py                 # SessionStore + 卡片数据构建 + 文本兜底格式化
-├── tpl_adapter.py           # art-template → Jinja2 模板适配
-├── _conf_schema.json        # 配置项 schema
-├── metadata.yaml            # 插件元数据
+├── main.py                  # 插件生命周期入口与路由绑定（~50行）
+├── __init__.py              # 顶层包入口
+├── metadata.yaml            # 插件元信息
+├── _conf_schema.json        # 配置项 Schema
+├── README.md                # 插件文档
+├── CHANGELOG.md             # 更新日志
 ├── requirements.txt         # Python 依赖
-├── __init__.py
-└── resources/html/          # 7 套 HTML 卡片模板（网易云红主题）
-    ├── ncm-list/            # 列表卡片
-    ├── ncm-detail/          # 歌曲详情
-    ├── ncm-lyric/           # 歌词
-    ├── ncm-hot/             # 热搜榜
-    ├── ncm-comment/         # 评论
-    ├── ncm-help/            # 帮助
-    └── ncm-status/          # 登录状态
+├── core/                    # 核心业务服务层
+│   ├── __init__.py          # 导出 MusicService
+│   ├── service.py           # 核心服务调度器（取链、卡片渲染、选歌会话调度、登录轮询生命周期）
+│   ├── api.py               # api-enhanced 客户端封装
+│   ├── cards.py             # 会话与卡片数据构造
+│   ├── delivery.py          # 音频下载与多平台分发
+│   ├── quality.py           # 音质常量与标签映射
+│   ├── render.py            # Playwright HTML 渲染引擎
+│   └── tpl_adapter.py       # 模板适配器
+├── handlers/                # 声明式指令路由层（按领域解耦）
+│   ├── __init__.py          # 聚合导出 ALL_ROUTES
+│   ├── base.py              # 声明式 Route 基类与 AstrBot 精准匹配安装器
+│   ├── play_cmds.py         # 播放类指令（点歌/听N/连播/播放）
+│   ├── explore_cmds.py      # 探索与榜单指令（排行/歌手/专辑/歌单/新歌/MV/电台等）
+│   ├── detail_cmds.py       # 详情与个人曲库指令（歌词/逐字歌词/评论/收藏/云盘/红心等）
+│   ├── auth_cmds.py         # 账号与登录指令（扫码登录/状态/登出）
+│   ├── system_cmds.py       # 系统与设置指令（帮助/设置/音质/API/开关）
+│   └── share_cmds.py        # 链接与分享卡片解析（EventMessageType.ALL）
+└── resources/               # HTML/CSS 渲染卡片与静态资源
 ```
 
 ---
@@ -335,7 +344,7 @@ QQ 群（申请frp的api和插件讨论）：[点击加入](https://qm.qq.com/q/
 
 ## 📄 许可
 
-本项目仅供学习交流使用。所有音乐版权归属网易云音乐及相应权利人，使用本插件产生的任何后果由使用者自行承担。
+本项目采用 [MIT](LICENSE) 许可证开源，本项目仅供学习交流使用。所有音乐版权归属网易云音乐及相应权利人，使用本插件产生的任何后果由使用者自行承担。
 
 ---
 
