@@ -35,6 +35,20 @@ NEW_SONG_AREAS = {"华语": 7, "欧美": 96, "日本": 8, "韩国": 16}
 PLAY_ALL_LIMIT = 30
 
 
+def _owner_marker_path() -> Path:
+    """三个音乐插件（网易云/酷狗/QQ）共用的「最近活跃归属」标记文件路径。
+
+    用于裸 #听N 的跨插件抢占：点歌出列表时写入本插件名，裸 #听N 仅由最近
+    活跃的插件响应，避免多插件同装时抢占顺序取决于插件加载顺序。
+    """
+    try:
+        from astrbot.api.star import StarTools
+
+        return Path(StarTools.get_data_dir()).parent / "_music_session_owner.json"
+    except Exception:
+        return Path(__file__).resolve().parent.parent / "_music_session_owner.json"
+
+
 def is_plugin_command_msg(msg: str) -> bool:
     return bool(
         re.match(
@@ -108,6 +122,43 @@ class MusicService:
         self.active_logins: dict[str, dict[str, Any]] = {}
         # 注入配置访问器给 api 模块
         ncmapi.set_config_getter(lambda: self.plugin.config or {})
+
+    # ──────────── 裸 #听N 跨插件抢占 ────────────
+
+    async def mark_session_owner(self) -> None:
+        """点歌出列表后，把本插件记录为「最近活跃的音乐插件」。"""
+        name = str(getattr(self.plugin, "name", "") or "")
+
+        def _w():
+            try:
+                p = _owner_marker_path()
+                p.parent.mkdir(parents=True, exist_ok=True)
+                tmp = p.with_name(p.name + ".tmp")
+                tmp.write_text(
+                    json.dumps({"plugin": name, "ts": int(time.time())}, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+                os.replace(tmp, p)  # 原子替换，避免并发写坏
+            except Exception:
+                pass
+
+        await asyncio.to_thread(_w)
+
+    async def is_session_owner(self) -> bool:
+        """本插件是否为最近活跃的音乐插件（无标记时视为 True，退化为「谁有会话谁响应」）。"""
+        name = str(getattr(self.plugin, "name", "") or "")
+
+        def _r() -> bool:
+            try:
+                p = _owner_marker_path()
+                if not p.exists():
+                    return True
+                data = json.loads(p.read_text(encoding="utf-8"))
+                return data.get("plugin") == name
+            except Exception:
+                return True
+
+        return await asyncio.to_thread(_r)
 
     @property
     def config(self) -> dict:
@@ -218,6 +269,7 @@ class MusicService:
         base = dict(session) if session else {}
         base.update({"type": "songs", "keyword": keyword, "data": lst, "action": action})
         await cardlib.SessionStore.set(self.plugin, scope, base)
+        await self.mark_session_owner()
         tip = f"回复 #ncm听N 即可{verb}"
         if self.cfg().get("renderListCard", True):
             data = cardlib.build_list_card_data(
@@ -444,6 +496,7 @@ class MusicService:
         await cardlib.SessionStore.set(
             self.plugin, scope, {"type": "songs", "keyword": keyword, "data": songs}
         )
+        await self.mark_session_owner()
         text = lambda: cardlib.format_song_list(songs, keyword, tip=tip)
         if self.cfg().get("renderListCard", True):
             data = cardlib.build_list_card_data(
@@ -716,11 +769,21 @@ class MusicService:
 
     def stop_poll(self, user_key: str):
         task = self.active_logins.pop(user_key, None)
-        if task and task.get("timer") is not None:
+        if not task:
+            return
+        task["stopped"] = True
+        if task.get("timer") is not None:
             try:
                 task["timer"].cancel()
             except Exception:
                 pass
+        # 取消所有已创建但仍在运行的 _tick 轮询任务，避免重载/登出后残留协程对旧 event 发消息
+        for job in task.get("jobs") or []:
+            if job and hasattr(job, "cancel"):
+                try:
+                    job.cancel()
+                except Exception:
+                    pass
 
     def start_poll(
         self, event: AstrMessageEvent, key: str, max_sec: int = 300
@@ -733,15 +796,26 @@ class MusicService:
             "busy": False,
             "notifiedScan": False,
             "failStreak": 0,
+            "jobs": [],
         }
         self.active_logins[user_key] = task
         loop = asyncio.get_running_loop()
+
+        def _spawn():
+            t = asyncio.create_task(_tick())
+            task["jobs"].append(t)
+            return t
+
+        def _schedule(delay: float):
+            handle = loop.call_later(delay, _spawn)
+            task["jobs"].append(handle)
+            return handle
 
         async def _tick():
             if task["stopped"]:
                 return
             if task["busy"]:
-                loop.call_later(0.8, lambda: asyncio.create_task(_tick()))
+                _schedule(0.8)
                 return
             if time.time() - started > max_sec:
                 task["stopped"] = True
@@ -781,11 +855,9 @@ class MusicService:
                 not task["stopped"]
                 and self.active_logins.get(user_key, {}).get("key") == key
             ):
-                task["timer"] = loop.call_later(
-                    2, lambda: asyncio.create_task(_tick())
-                )
+                task["timer"] = _schedule(2)
 
-        task["timer"] = loop.call_later(2, lambda: asyncio.create_task(_tick()))
+        task["timer"] = _schedule(2)
 
     async def finish_login(
         self, event: AstrMessageEvent, body: dict, user_key: str, task: dict
@@ -934,7 +1006,7 @@ class MusicService:
                     event, f"链接解析 · {info.get('name') or '专辑'}", songs[:30]
                 )
                 return True
-            m = re.search(r"song\?(?:[^&\s]*&)*id=(\d+)|song/(\\d+)", text)
+            m = re.search(r"song\?(?:[^&\s]*&)*id=(\d+)|song/(\d+)", text)
             if m:
                 sid = int(m.group(1) or m.group(2))
                 lst = await ncmapi.song_detail([sid], user_key=user_key)
@@ -945,6 +1017,15 @@ class MusicService:
                     event, lst[0], user_key=user_key, source="链接解析"
                 )
                 return True
+            # 仅在文本里确实存在网易云分享域名（链接/卡片）时才做关键词兜底搜索。
+            # 避免只含「网易云音乐」等字样、但没有真实分享链接的消息（例如登录提示文案）
+            # 被误判为点歌请求而自动发送一首歌。
+            if not re.search(
+                r"music\.163\.com|163music\.com|163cn\.tv|y\.music\.163\.com",
+                text,
+                re.IGNORECASE,
+            ):
+                return False
             kw = re.sub(r"https?://\S+|\[CQ:[^\]]*\]", "", text).strip()
             kw = re.sub(
                 r"music\.163\.com|163music\.com|网易云音乐|分享|歌曲|链接",
@@ -965,6 +1046,8 @@ class MusicService:
             await self.reply(event, f"解析失败：{err}")
             return True
 
-    def terminate(self):
+    async def terminate(self):
         for user_key in list(self.active_logins.keys()):
             self.stop_poll(user_key)
+        # 关闭复用的 aiohttp 会话，避免热重载后残留连接
+        await ncmapi.close_session()

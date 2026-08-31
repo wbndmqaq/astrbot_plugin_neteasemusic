@@ -61,7 +61,7 @@ class NeteaseMusicPlugin(Star):
 
     async def terminate(self):
         """插件卸载/重载时清理轮询等任务。"""
-        self.service.terminate()
+        await self.service.terminate()
 
 
 # 安装全部声明式路由（handlers/ 目录按业务域维护）

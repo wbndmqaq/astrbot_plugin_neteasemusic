@@ -1,5 +1,30 @@
 # 更新日志
 
+## [v2.0.1] - 2026-08-31
+
+### 🐛 缺陷修复
+
+- **修复 `/song/` 路径链接解析失效**：`core/service.py` 歌曲链接正则由 `song/(\\d+)` 修正为 `song/(\d+)`，`/song/123` 形式的链接现可正常解析。
+
+### ⚡ 内存与资源治理
+
+- **会话缓存容量上限**：`SessionStore` 增加 `MAX_MEM=512` 上限与 `_evict_if_needed()` 淘汰策略（按更新时间淘汰最旧，数据已持久化不丢失），修复类级字典慢泄露。
+- **复用 HTTP 会话**：`api.py` 新增模块级 `_get_session()`/`close_session()` 复用 `ClientSession`（请求、重定向探测、QQ 官方跳转全部复用），`terminate()` 改为异步并关闭会话。
+
+### 🚀 流式下载
+
+- **音频下载改流式**：`download_audio` 由 `res.read()` 整读改为 `iter_chunked(256KB)` 分块 + 定时 `asyncio.to_thread` 追加落盘，显著降低内存峰值。
+
+### 🔧 多插件协作
+
+- **`#听N` 跨插件归属标记**：三插件共享「最近活跃归属」标记 `_music_session_owner.json`，裸 `#听N` 仅最近活跃插件响应，带前缀（`#ncm听N` 等）始终直接响应，避免多音乐插件同装时抢占。
+
+### 📝 文档
+
+- `metadata.yaml` 版本号去除 `v` 前缀统一格式；`requirements.txt` 补充 `jinja2>=3.0.0` 声明。
+
+---
+
 ## [v2.0.0] - 2026-08-28
 
 ### 🏗️ 架构升级 · 全面模块化

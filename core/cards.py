@@ -13,6 +13,20 @@ from .quality import QUALITY_LABEL
 class SessionStore:
     _mem: dict = {}
     TTL = 600
+    # 内存缓存条数上限：防止大量群/私聊会话长期驻留导致无界增长。
+    # 超过上限时按 updatedAt 淘汰最旧条目（数据已持久化到 KV，淘汰不丢数据）。
+    MAX_MEM = 512
+
+    @classmethod
+    def _evict_if_needed(cls) -> None:
+        if len(cls._mem) <= cls.MAX_MEM:
+            return
+        overflow = len(cls._mem) - cls.MAX_MEM
+        oldest = sorted(
+            cls._mem.items(), key=lambda kv: kv[1].get("updatedAt") or 0
+        )[:overflow]
+        for k, _ in oldest:
+            cls._mem.pop(k, None)
 
     @classmethod
     def _key(cls, scope: str) -> str:
@@ -43,6 +57,7 @@ class SessionStore:
     @classmethod
     async def set(cls, plugin, scope: str, session: dict, ttl_sec: int = TTL) -> dict:
         data = {"group_id": scope, "updatedAt": time.time(), **session}
+        cls._evict_if_needed()
         cls._mem[str(scope)] = data
         try:
             await plugin.put_kv_data(cls._key(scope), json.dumps(data, ensure_ascii=False))
