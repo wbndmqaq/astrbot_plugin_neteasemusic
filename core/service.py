@@ -304,7 +304,8 @@ class MusicService:
     async def send_lyric_pages(
         self, event: AstrMessageEvent, song: dict, lines: list, *, base_tip: str
     ) -> None:
-        pages = [lines[i : i + 36] for i in range(0, len(lines), 36)]
+        # 每页 60 行，多数歌一页发完，避免一首歌连刷 2~3 条
+        pages = [lines[i : i + 60] for i in range(0, len(lines), 60)]
         total = len(lines)
         for pi, page_lines in enumerate(pages):
             data = cardlib.build_lyric_card_data(song, page_lines, line_count=total)
@@ -313,13 +314,17 @@ class MusicService:
                 if len(pages) > 1
                 else base_tip
             )
+            # 续页不再重复「♪ 歌名 - 歌手」抬头
+            fmt = (
+                (lambda d: cardlib.format_lyric_text(song, d.get("lines") or []))
+                if pi == 0
+                else (lambda d: "\n".join(d.get("lines") or []))
+            )
             ok = await self.reply_card_or_text(
                 event,
                 tpl_name="ncm-lyric",
                 data=data,
-                format_text=lambda d: cardlib.format_lyric_text(
-                    song, d.get("lines") or []
-                ),
+                format_text=fmt,
             )
             if not ok:
                 break
@@ -485,8 +490,17 @@ class MusicService:
             format_text=lambda d: cardlib.format_detail_text(song, play, tip),
         )
         if play.get("url"):
+            # 上面 reply_card_or_text 已发过一条歌曲信息（♪ 歌名-歌手 / 专辑 / 音质 /
+            # 正在下载…），deliver_song 内再发一遍 pending_text 是重复，这里跳过，
+            # 只让它发语音 + 文件。
             await deliver_song(
-                self.plugin, event, song, play, cfg=cfg, plugin_dir=PLUGIN_DIR
+                self.plugin,
+                event,
+                song,
+                play,
+                cfg=cfg,
+                plugin_dir=PLUGIN_DIR,
+                options={"skipTextInfo": True},
             )
 
     async def list_to_session(
