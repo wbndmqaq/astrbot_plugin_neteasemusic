@@ -15,24 +15,37 @@ from astrbot.api.message_components import Image, Plain
 if TYPE_CHECKING:
     from ..main import NeteaseMusicPlugin
 
-try:
-    from . import api as ncmapi
-    from . import cards as cardlib
-    from .api import ApiError
-    from .delivery import _write_bytes, deliver_song, get_temp_dir
-    from .quality import QUALITY_LABEL
-    from .render import render_card_png
-except ImportError:
-    from core import api as ncmapi
-    from core import cards as cardlib
-    from core.api import ApiError
-    from core.delivery import _write_bytes, deliver_song, get_temp_dir
-    from core.quality import QUALITY_LABEL
-    from core.render import render_card_png
+from . import api as ncmapi
+from . import cards as cardlib
+from . import lists as listlib
+from . import login as loginlib
+from . import panels as panellib
+from . import resolve as resolvelib
+from .api import ApiError, as_int
+from .delivery import (
+    CLEANUP_CANCEL_GRACE_SEC,
+    MIN_KEEP_SEC,
+    _write_bytes,
+    deliver_song,
+    get_temp_dir,
+)
+from .messages import MSG_LYRIC_TIP, unblock_label
+from .quality import QUALITY_LABEL
+from .render import close_browser, render_card_png
 
 PLUGIN_DIR = str(Path(__file__).resolve().parent.parent)
+PLUGIN_NAME = "astrbot_plugin_neteasemusic"
 NEW_SONG_AREAS = {"华语": 7, "欧美": 96, "日本": 8, "韩国": 16}
+# 连播上限（#ncm听所有）
 PLAY_ALL_LIMIT = 30
+# 歌词卡片每页行数
+LYRIC_PAGE_LINES = 36
+# 歌词翻译最多展示行数
+TRANSLATION_MAX_LINES = 12
+# 逐字歌词最多展示行数
+YRC_MAX_LINES = 72
+# 登录二维码图片保留秒数
+QR_IMAGE_KEEP_SEC = 120
 
 
 def _owner_marker_path() -> Path:
@@ -44,9 +57,17 @@ def _owner_marker_path() -> Path:
     try:
         from astrbot.api.star import StarTools
 
-        return Path(StarTools.get_data_dir()).parent / "_music_session_owner.json"
+        # 必须显式传插件名：StarTools 只在调用栈位于插件主模块（main.py）时才能
+        # 反查插件元数据，本函数在 core/service.py 里，不传名会抛 RuntimeError。
+        data_dir = StarTools.get_data_dir(PLUGIN_NAME)
+        return data_dir.parent / "_music_session_owner.json"
     except Exception:
         return Path(__file__).resolve().parent.parent / "_music_session_owner.json"
+
+
+def _mv_name_key(text: str) -> str:
+    """MV/歌曲名归一化：去空白与常见括号修饰，便于同名比对。"""
+    return re.sub(r"[\s\-_·（）()《》\[\]【】]", "", text or "").lower()
 
 
 def is_plugin_command_msg(msg: str) -> bool:
@@ -120,6 +141,10 @@ class MusicService:
     def __init__(self, plugin: NeteaseMusicPlugin):
         self.plugin = plugin
         self.active_logins: dict[str, dict[str, Any]] = {}
+        # 后台任务引用集合（清理定时器等）：持有引用避免被 GC，卸载时统一取消
+        self._bg_tasks: set[asyncio.Task] = set()
+        # 已排期清理的临时文件：任务 → 路径，供 terminate() 在取消定时器后补删
+        self._cleanup_paths: dict[asyncio.Task, tuple[str, float]] = {}
         # 注入配置访问器给 api 模块
         ncmapi.set_config_getter(lambda: self.plugin.config or {})
 
@@ -160,12 +185,73 @@ class MusicService:
 
         return await asyncio.to_thread(_r)
 
-    @property
-    def config(self) -> dict:
-        return self.plugin.config or {}
-
     def cfg(self) -> dict:
         return self.plugin.config or {}
+
+    async def save_config(self) -> bool:
+        """安全写盘：兼容旧版 AstrBot（无异步写盘 API）。返回是否写入成功。"""
+        cfg = self.plugin.config
+        try:
+            saver = getattr(cfg, "save_config_async", None)
+            if callable(saver):
+                # AstrBot 4.27.4 起该 API 返回「本次快照是否被提交」：并发写盘
+                # 时有更新的快照胜出则返回 False（此时盘上已是更新的配置，本次
+                # 修改也已包含在其中，但本次调用确实未提交，故按未提交回报）；
+                # 旧版返回 None，语义是「调用未抛异常即已写入」——None 视为成功，
+                # 否则会把旧版一律误判为写盘失败。只有明确的 False 才算未落盘。
+                return (await saver()) is not False
+            sync_saver = getattr(cfg, "save_config", None)
+            if callable(sync_saver):
+                # 同步写盘 API 无返回值（None）即视为成功，判定口径与上面一致
+                return (await asyncio.to_thread(sync_saver)) is not False
+        except Exception as e:  # noqa: BLE001
+            self.log_warn(f"配置保存失败: {e}")
+            return False
+        self.log_warn("配置保存失败: 当前 AstrBot 版本不支持配置写盘 API")
+        return False
+
+    def _spawn_bg(self, coro):
+        """后台任务：持有引用避免被 GC，并记录异常，插件卸载时统一取消。"""
+        try:
+            task = asyncio.create_task(coro)
+        except Exception as e:  # noqa: BLE001
+            self.log_warn(f"后台任务启动失败: {e}")
+            return None
+        self._bg_tasks.add(task)
+
+        def _done(t: asyncio.Task):
+            self._bg_tasks.discard(t)
+            if not t.cancelled() and t.exception() is not None:
+                self.log_warn(f"后台任务异常: {t.exception()}")
+
+        task.add_done_callback(_done)
+        return task
+
+    def schedule_cleanup(self, path: str, keep_sec: int) -> None:
+        """延时删除临时文件（延迟下限 MIN_KEEP_SEC）。
+
+        句柄由 _bg_tasks 持有，插件卸载/重载时随 terminate() 取消，
+        避免旧实例的清理定时器在重载后继续跑。
+        取消也意味着回调不再执行，因此这里把「任务 → 待删路径」登记到
+        _cleanup_paths，让 terminate() 在取消后补删这些文件（否则音频/卡片图
+        会永远留在 tempDir，重载越频繁残留越多）；定时器正常触发时由
+        done 回调自行注销，不会重复删除。
+        """
+        delay = max(as_int(keep_sec, 0), MIN_KEEP_SEC)
+        task = self._spawn_bg(self._cleanup_later(path, delay))
+        if task is None:
+            return
+        self._cleanup_paths[task] = (path, time.time())
+
+        def _forget(t: asyncio.Task):
+            self._cleanup_paths.pop(t, None)
+
+        task.add_done_callback(_forget)
+
+    async def _cleanup_later(self, path: str, delay: float) -> None:
+        await asyncio.sleep(delay)
+        # 删除走线程池：事件循环内不做同步磁盘 IO
+        await asyncio.to_thread(self.safe_unlink, path)
 
     def log_warn(self, msg: str):
         logger.warning(f"[neteasemusic] {msg}")
@@ -176,35 +262,49 @@ class MusicService:
     def plain(self, text: str) -> Plain:
         return Plain(text=text)
 
-    async def send_chain(self, event: AstrMessageEvent, *components):
+    async def send_chain(self, event: AstrMessageEvent, *components, raise_on_error: bool = False) -> bool:
+        """发送消息链；返回是否真的发出。
+
+        ``raise_on_error=True`` 会把发送失败重新抛出：投递层（core/delivery.py）依赖
+        这个异常触发降级链——语音直发失败时退回 `Record` 组件、文件发送失败时用
+        ffmpeg 压成紧凑 mp3 重试。把异常吞掉，整条降级链就都成了死代码。
+
+        默认 ``False``：只记日志并返回 ``False``，避免平台侧发送失败（风控/超限/协议
+        错误）穿透成内核的通用报错——那种情况下用户看到的是「调用插件时出现异常」，
+        而且 handler 里的 ``stop_event()`` 也不会执行。调用方按返回值决定是否降级。
+        """
         comps = [c for c in components if c is not None]
         if not comps:
-            return
+            return False
+        # 先探测能力，而不是捕获 AttributeError：把「内核太旧、没有 event.send」与
+        # 「平台适配器内部抛 AttributeError」区分开，后者应被当成发送失败。
+        if getattr(event, "send", None) is None:
+            # 事件对象根本没有 send（极旧内核）：退无可退，直接按发送失败处理。
+            # 注意这里**不能**再调 event.send 重发文本——它按定义就是 None，
+            # 只会抛 AttributeError 掩盖真正的原因。
+            texts = [str(t) for t in (getattr(_c, "text", None) for _c in comps) if t]
+            self.log_warn(
+                "_send_chain：事件对象没有 send 方法，无法发送"
+                + (f"（原有文本 {len(texts)} 段）" if texts else "")
+            )
+            if raise_on_error:
+                raise RuntimeError("event.send 不可用，无法发送消息")
+            return False
         mc = MessageChain(chain=list(comps))
         mc.use_markdown_ = False
         try:
             await event.send(mc)
-        except AttributeError:
-            import traceback as _tb
-
-            self.log_warn(f"_send_chain 发送失败（AttributeError）:\n{_tb.format_exc()}")
-            texts = []
-            for _c in comps:
-                t = getattr(_c, "text", None)
-                if t:
-                    texts.append(str(t))
-            if texts:
-                try:
-                    _fb = MessageChain(chain=[self.plain("\n".join(texts))])
-                    _fb.use_markdown_ = False
-                    await event.send(_fb)
-                except Exception as _e2:
-                    self.log_warn(f"_send_chain 文本兜底也失败: {_e2}")
+            return True
+        except Exception as err:  # noqa: BLE001
+            self.log_warn(f"_send_chain 发送失败: {err}")
+            if raise_on_error:
+                raise
+            return False
 
     async def reply(self, event: AstrMessageEvent, text: str):
         try:
             await self.send_chain(event, self.plain(text))
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             import traceback as _tb
 
             self.log_warn(f"_reply 发送失败: {e}\n{_tb.format_exc()}")
@@ -228,15 +328,6 @@ class MusicService:
             return None
         return re.match(pattern, event.message_str.strip(), re.IGNORECASE)
 
-    async def resolve_song(self, kw: str, user_key: str) -> dict | None:
-        if not (kw or "").strip():
-            return None
-        if re.fullmatch(r"\d+", kw):
-            lst = await ncmapi.song_detail([int(kw)], user_key=user_key)
-            return lst[0] if lst else None
-        lst = await ncmapi.search(kw, type_=1, limit=1, user_key=user_key)
-        return lst[0] if lst else None
-
     async def start_select(
         self,
         event: AstrMessageEvent,
@@ -247,42 +338,10 @@ class MusicService:
         verb: str,
         user_key: str,
     ) -> None:
-        """进入"先选歌再操作"流程。"""
-        scope = self.scope(event)
-        session = await cardlib.SessionStore.get(self.plugin, scope)
-        if (kw or "").strip():
-            page_size = min(int(self.cfg().get("maxList") or 10), 20)
-            lst = await ncmapi.search(kw, type_=1, limit=page_size, user_key=user_key)
-            if not lst:
-                await self.reply(event, f"没有搜到「{kw}」")
-                return
-            keyword = kw
-        else:
-            lst = (session or {}).get("data") or []
-            if not lst:
-                await self.reply(
-                    event,
-                    f"用法：先 #ncm点歌 关键词 选中歌曲，再发 #ncm{label}；或直接 #ncm{label} 关键词 选择",
-                )
-                return
-            keyword = (session or {}).get("keyword") or "当前会话"
-        base = dict(session) if session else {}
-        base.update({"type": "songs", "keyword": keyword, "data": lst, "action": action})
-        await cardlib.SessionStore.set(self.plugin, scope, base)
-        await self.mark_session_owner()
-        tip = f"回复 #ncm听N 即可{verb}"
-        if self.cfg().get("renderListCard", True):
-            data = cardlib.build_list_card_data(
-                keyword, lst, options={"tip": tip}, cfg=self.cfg()
-            )
-            if await self.reply_card_or_text(
-                event,
-                tpl_name="ncm-list",
-                data=data,
-                format_text=lambda d: cardlib.format_song_list(lst, keyword, tip=tip),
-            ):
-                return
-        await self.reply(event, cardlib.format_song_list(lst, keyword, tip=tip))
+        """进入"先选歌再操作"流程（实现见 core/lists.py）。"""
+        await listlib.start_select(
+            self, event, action, kw, label=label, verb=verb, user_key=user_key
+        )
 
     async def show_lyric(self, event: AstrMessageEvent, song: dict, user_key: str) -> None:
         lr = await ncmapi.lyric(song["id"], user_key=user_key)
@@ -290,7 +349,7 @@ class MusicService:
         if not lines:
             await self.reply(event, "暂无歌词")
             return
-        await self.send_lyric_pages(event, song, lines, base_tip="歌词来自网易云音乐")
+        await self.send_lyric_pages(event, song, lines, base_tip=MSG_LYRIC_TIP)
 
     async def show_lyric_word(self, event: AstrMessageEvent, song: dict, user_key: str) -> None:
         lr = await ncmapi.lyric_new(song["id"], user_key=user_key)
@@ -304,7 +363,10 @@ class MusicService:
     async def send_lyric_pages(
         self, event: AstrMessageEvent, song: dict, lines: list, *, base_tip: str
     ) -> None:
-        pages = [lines[i : i + 36] for i in range(0, len(lines), 36)]
+        pages = [
+            lines[i : i + LYRIC_PAGE_LINES]
+            for i in range(0, len(lines), LYRIC_PAGE_LINES)
+        ]
         total = len(lines)
         for pi, page_lines in enumerate(pages):
             data = cardlib.build_lyric_card_data(song, page_lines, line_count=total)
@@ -344,6 +406,29 @@ class MusicService:
             return
         await self.list_to_session(event, f"相似歌曲 · {song['name'] or ''}", songs)
 
+    @staticmethod
+    def _match_song_mv(candidates: list, name: str, artist: str) -> list:
+        """从 MV 检索结果里挑歌名对得上的候选（歌名命中优先，其次歌手命中）。
+
+        网易 MV 检索经常混入「同名但不同歌手」的结果（实测按「晴天」检索返回
+        高伟 / 邓天晴 / zeevi 三首《晴天》），因此不能直接取第一条。
+        """
+        if not candidates or not name:
+            return []
+        target = _mv_name_key(name)
+        if not target:
+            return []
+        hits = []
+        for item in candidates:
+            cand = _mv_name_key(item.get("name") or "")
+            if cand and (cand == target or target in cand or cand in target):
+                hits.append(item)
+        if not hits:
+            return []
+        if artist:
+            hits.sort(key=lambda item: artist not in (item.get("artist") or ""))
+        return hits
+
     async def show_mv(self, event: AstrMessageEvent, song: dict, user_key: str) -> None:
         mvid = song.get("mvid") or 0
         if mvid:
@@ -357,9 +442,13 @@ class MusicService:
                 }
             ]
         else:
-            mvs = await ncmapi.search_mv(
-                song.get("name") or "", limit=1, user_key=user_key
-            )
+            # 上游当前 build 在 /cloudsearch、/song/detail 里都不给 MV id（``mv`` 恒为 0，
+            # 且无 ``mvid`` 字段），直连路径实际不可达，只能按歌名检索。检索质量见
+            # ``_match_song_mv``：歌名对不上时宁可回「暂无 MV」，也不给用户看错 MV。
+            name = song.get("name") or ""
+            artist = song.get("artist") or ""
+            candidates = await ncmapi.search_mv(f"{name} {artist}".strip(), limit=5, user_key=user_key)
+            mvs = self._match_song_mv(candidates, name, artist)
         if not mvs:
             await self.reply(event, "该歌曲暂无 MV")
             return
@@ -382,9 +471,10 @@ class MusicService:
     async def show_like(
         self, event: AstrMessageEvent, song: dict, user_key: str, *, unlike: bool
     ) -> None:
+        unliked_text = f"💔 已取消红心：{song['name']} - {song['artist']}"
         if unlike:
             await ncmapi.like(song["id"], like_=False, user_key=user_key)
-            await self.reply(event, f"💔 已取消红心：{song['name']} - {song['artist']}")
+            await self.reply(event, unliked_text)
             return
         try:
             checked = await ncmapi.song_like_check([song["id"]], user_key=user_key)
@@ -393,7 +483,7 @@ class MusicService:
             liked = False
         await ncmapi.like(song["id"], like_=not liked, user_key=user_key)
         if liked:
-            await self.reply(event, f"💔 已取消红心：{song['name']} - {song['artist']}")
+            await self.reply(event, unliked_text)
         else:
             await self.reply(event, f"❤️ 已红心：{song['name']} - {song['artist']}")
 
@@ -422,19 +512,31 @@ class MusicService:
         return bool(self.cfg().get("defaultCookie"))
 
     async def get_uid(self, user_key: str) -> str:
+        """返回当前账号 uid。
+
+        区分两种「拿不到 uid」：
+          - 未登录（API 正常返回、无 profile）→ 返回 ``""``，调用方回 ``MSG_NEED_LOGIN``；
+          - API 本身不可用（301/风控/服务未启动/网络错误）→ 抛 ``ApiError``，
+            调用方必须如实回复真实原因（原实现 ``except Exception: pass`` 会把
+            「服务挂掉」谎报成「需要登录」，引导用户做无用的扫码）。
+        """
         uid = str(self.cfg().get("defaultUid") or "")
         if uid:
             return uid
         try:
             st = await ncmapi.login_status(user_key=user_key)
-            profile = st.get("profile") or {}
-            if profile and profile.get("userId"):
-                uid = str(profile["userId"])
-                self.plugin.config["defaultUid"] = uid
-                self.plugin.config.save_config()
-                return uid
-        except Exception:
-            pass
+        except ApiError as err:
+            self.log_warn(f"查询登录态失败: {err}")
+            raise
+        except Exception as err:  # noqa: BLE001 - 统一转成 ApiError，避免穿透 handler
+            self.log_warn(f"查询登录态异常: {type(err).__name__}: {err}")
+            raise ApiError(f"获取账号信息失败：{type(err).__name__}: {err}") from err
+        profile = st.get("profile") or {}
+        if profile and profile.get("userId"):
+            uid = str(profile["userId"])
+            self.plugin.config["defaultUid"] = uid
+            await self.save_config()
+            return uid
         return ""
 
     async def resolve_play(self, song: dict, cfg: dict, user_key: str = "") -> dict:
@@ -442,7 +544,10 @@ class MusicService:
         unblock = cfg.get("qualityUnblock", True) is not False
         try:
             play = await ncmapi.song_url_best(
-                song["id"], level=quality, user_key=user_key, unblock_fallback=unblock
+                song.get("id"),
+                level=quality,
+                user_key=user_key,
+                unblock_fallback=unblock,
             )
             return {
                 "url": play.get("url", ""),
@@ -468,7 +573,7 @@ class MusicService:
         play = await self.resolve_play(song, cfg, user_key)
         quality_label = play.get("qualityLabel") or ""
         if play.get("unblocked"):
-            quality_label = f"{quality_label}（解灰）" if quality_label else "解灰音源"
+            quality_label = unblock_label(quality_label)
         if play.get("url"):
             tip = "正在下载并发送语音/文件…"
         elif play.get("error"):
@@ -486,136 +591,40 @@ class MusicService:
         )
         if play.get("url"):
             await deliver_song(
-                self.plugin, event, song, play, cfg=cfg, plugin_dir=PLUGIN_DIR
+                self.plugin, event, song, play, cfg=cfg
             )
 
     async def list_to_session(
         self, event: AstrMessageEvent, keyword: str, songs: list, *, tip: str = ""
     ) -> bool:
-        scope = self.scope(event)
-        await cardlib.SessionStore.set(
-            self.plugin, scope, {"type": "songs", "keyword": keyword, "data": songs}
-        )
-        await self.mark_session_owner()
-        text = lambda: cardlib.format_song_list(songs, keyword, tip=tip)
-        if self.cfg().get("renderListCard", True):
-            data = cardlib.build_list_card_data(
-                keyword, songs, options={"tip": tip}, cfg=self.cfg()
-            )
-            if await self.reply_card_or_text(
-                event, tpl_name="ncm-list", data=data, format_text=lambda d: text()
-            ):
-                return True
-        await self.reply(event, text())
-        return True
+        """歌曲列表写入会话并出卡片（实现见 core/lists.py）。"""
+        return await listlib.list_to_session(self, event, keyword, songs, tip=tip)
 
     async def playlist_list_to_session(
         self, event: AstrMessageEvent, title: str, pls: list, *, subtitle: str = ""
     ) -> bool:
-        scope = self.scope(event)
-        await cardlib.SessionStore.set(
-            self.plugin, scope, {"type": "playlistList", "keyword": title, "data": pls}
-        )
-        tip = "回复 #ncm听N 查看该歌单曲目"
-        data = cardlib.build_playlist_card_data(
-            title, pls, subtitle=subtitle, tip=tip, cfg=self.cfg()
-        )
-        return await self.reply_card_or_text(
-            event,
-            tpl_name="ncm-playlist",
-            data=data,
-            format_text=lambda d: cardlib.format_playlist_text(title, pls, tip=tip),
+        """歌单候选列表写入会话（实现见 core/lists.py）。"""
+        return await listlib.playlist_list_to_session(
+            self, event, title, pls, subtitle=subtitle
         )
 
     async def album_list_to_session(
         self, event: AstrMessageEvent, title: str, albums: list
     ) -> bool:
-        scope = self.scope(event)
-        await cardlib.SessionStore.set(
-            self.plugin, scope, {"type": "albumList", "keyword": title, "data": albums}
-        )
-        tip = "回复 #ncm听N 查看该专辑曲目"
-        items = [
-            {
-                "name": a.get("name") or "",
-                "sub": a.get("artist") or "",
-                "tag": f"{a.get('size') or a.get('trackCount') or '?'}首"
-                if (a.get("size") or a.get("trackCount"))
-                else "",
-                "cover": a.get("cover") or "",
-            }
-            for a in albums
-        ]
-        data = cardlib.build_generic_card_data(
-            title, items, subtitle="专辑候选", tip=tip, cfg=self.cfg()
-        )
-        return await self.reply_card_or_text(
-            event,
-            tpl_name="ncm-generic",
-            data=data,
-            format_text=lambda d: cardlib.format_generic_text(title, items, tip=tip),
-        )
+        """专辑候选列表写入会话（实现见 core/lists.py）。"""
+        return await listlib.album_list_to_session(self, event, title, albums)
 
     async def expand_playlist(
         self, event: AstrMessageEvent, session: dict, n: int
     ) -> None:
-        pls = session.get("data") or []
-        if n < 1 or n > len(pls):
-            await self.reply(event, f"序号超出范围（1-{len(pls)}）")
-            event.stop_event()
-            return
-        p = pls[n - 1]
-        try:
-            songs = await ncmapi.playlist_tracks(p["id"], user_key=self.user_key(event))
-        except ApiError as err:
-            self.log_warn(f"歌单展开失败: {err}")
-            await self.reply(event, f"歌单展开失败：{err}")
-            event.stop_event()
-            return
-        if not songs:
-            await self.reply(event, f"歌单「{p['name']}」暂无曲目")
-            event.stop_event()
-            return
-        shown = songs[:30]
-        await self.list_to_session(
-            event,
-            f"歌单 · {p['name']}",
-            shown,
-            tip=f"歌单共 {len(songs)} 首，显示前 {len(shown)} 首；回复 #ncm听N 播放，#ncm听所有 连播",
-        )
-        event.stop_event()
+        """会话歌单序号展开（实现见 core/lists.py）。"""
+        await listlib.expand_playlist(self, event, session, n)
 
     async def expand_album(
         self, event: AstrMessageEvent, session: dict, n: int
     ) -> None:
-        albums = session.get("data") or []
-        if n < 1 or n > len(albums):
-            await self.reply(event, f"序号超出范围（1-{len(albums)}）")
-            event.stop_event()
-            return
-        a = albums[n - 1]
-        try:
-            album_info, songs = await ncmapi.album_detail(
-                a["id"], user_key=self.user_key(event)
-            )
-        except ApiError as err:
-            self.log_warn(f"专辑展开失败: {err}")
-            await self.reply(event, f"专辑展开失败：{err}")
-            event.stop_event()
-            return
-        info = album_info or {}
-        name = info.get("name") or a.get("name") or "专辑"
-        if not songs:
-            await self.reply(event, f"专辑「{name}」暂无曲目")
-            event.stop_event()
-            return
-        await self.list_to_session(
-            event,
-            f"专辑 · {name}",
-            songs,
-            tip=f"歌手：{info.get('artist') or ''} · 共 {len(songs)} 首；回复 #ncm听N 播放，#ncm听所有 连播整张专辑",
-        )
-        event.stop_event()
+        """会话专辑序号展开（实现见 core/lists.py）。"""
+        await listlib.expand_album(self, event, session, n)
 
     async def render_card(
         self, event: AstrMessageEvent, data: dict, tpl_name: str
@@ -630,13 +639,13 @@ class MusicService:
             if raw is None:
                 return None
 
-            d = get_temp_dir(self.cfg(), PLUGIN_DIR)
+            d = await get_temp_dir()
             file_path = os.path.join(
                 d, f"card_{tpl_name}_{int(time.time() * 1000)}.png"
             )
             await asyncio.to_thread(_write_bytes, file_path, raw)
             return file_path
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             self.log_warn(f"{tpl_name} 本地渲染失败: {e}")
             return None
 
@@ -651,23 +660,20 @@ class MusicService:
         card_path = None
         try:
             card_path = await self.render_card(event, data, tpl_name)
-            if card_path:
-                await self.send_chain(event, Image.fromFileSystem(card_path))
+            # 必须看发送结果：卡片被平台拒绝（风控/体积/协议限制）时要落到下面的纯文本兜底，
+            # 否则用户什么都收不到，只在日志里留一条警告。
+            if card_path and await self.send_chain(event, Image.fromFileSystem(card_path)):
                 return True
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             self.log_warn(f"{tpl_name} 卡片渲染失败，回退文本: {e}")
         finally:
             if card_path:
-                asyncio.get_running_loop().call_later(
-                    max(0, int(self.cfg().get("keepFileSec", 60))),
-                    lambda: self.safe_unlink(card_path),
-                )
+                self.schedule_cleanup(card_path, as_int(self.cfg().get("keepFileSec", 60), 60))
         try:
             text = format_text(data)
-            if text:
-                await self.send_chain(event, self.plain(text))
+            if text and await self.send_chain(event, self.plain(text)):
                 return True
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             self.log_warn(f"{tpl_name} 文本兜底失败: {e}")
         return False
 
@@ -681,12 +687,12 @@ class MusicService:
             data = base64.b64decode(raw)
 
             path = os.path.join(
-                get_temp_dir(self.cfg(), PLUGIN_DIR),
+                await get_temp_dir(),
                 f"qr_{int(time.time() * 1000)}.png",
             )
             await asyncio.to_thread(_write_bytes, path, data)
             return path
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             self.log_warn(f"保存二维码失败: {e}")
             return None
 
@@ -716,10 +722,10 @@ class MusicService:
 
         def _clean(raw: str) -> list:
             out = []
-            for l in raw.splitlines():
-                t = _parse_line(l)
+            for line in raw.splitlines():
+                t = _parse_line(line)
                 if t and not re.match(
-                    r"^\s*\[(ti|ar|al|by|offset|total):", l, re.IGNORECASE
+                    r"^\s*\[(ti|ar|al|by|offset|total):", line, re.IGNORECASE
                 ):
                     out.append(t)
             return out
@@ -727,11 +733,11 @@ class MusicService:
         out = _clean(lrc)
         if tlyric:
             tr = []
-            for l in tlyric.splitlines():
-                t = _parse_line(l)
+            for line in tlyric.splitlines():
+                t = _parse_line(line)
                 if t:
                     tr.append(t)
-                if len(tr) >= 12:
+                if len(tr) >= TRANSLATION_MAX_LINES:
                     break
             if tr:
                 out.append("")
@@ -740,7 +746,7 @@ class MusicService:
         return out
 
     @staticmethod
-    def extract_yrc_lines(yrc: str, max_lines: int = 72) -> list:
+    def extract_yrc_lines(yrc: str, max_lines: int = YRC_MAX_LINES) -> list:
         out = []
         for line in (yrc or "").splitlines():
             line = line.strip()
@@ -768,182 +774,12 @@ class MusicService:
         return out
 
     def stop_poll(self, user_key: str):
-        task = self.active_logins.pop(user_key, None)
-        if not task:
-            return
-        task["stopped"] = True
-        if task.get("timer") is not None:
-            try:
-                task["timer"].cancel()
-            except Exception:
-                pass
-        # 取消所有已创建但仍在运行的 _tick 轮询任务，避免重载/登出后残留协程对旧 event 发消息
-        for job in task.get("jobs") or []:
-            if job and hasattr(job, "cancel"):
-                try:
-                    job.cancel()
-                except Exception:
-                    pass
+        """停止扫码轮询（实现见 core/login.py）。"""
+        loginlib.stop_poll(self, user_key)
 
-    def start_poll(
-        self, event: AstrMessageEvent, key: str, max_sec: int = 300
-    ):
-        user_key = self.user_key(event)
-        started = time.time()
-        task = {
-            "key": key,
-            "stopped": False,
-            "busy": False,
-            "notifiedScan": False,
-            "failStreak": 0,
-            "jobs": [],
-        }
-        self.active_logins[user_key] = task
-        loop = asyncio.get_running_loop()
-
-        def _spawn():
-            t = asyncio.create_task(_tick())
-            task["jobs"].append(t)
-            return t
-
-        def _schedule(delay: float):
-            handle = loop.call_later(delay, _spawn)
-            task["jobs"].append(handle)
-            return handle
-
-        async def _tick():
-            if task["stopped"]:
-                return
-            if task["busy"]:
-                _schedule(0.8)
-                return
-            if time.time() - started > max_sec:
-                task["stopped"] = True
-                self.active_logins.pop(user_key, None)
-                await self.reply(event, "二维码已过期，请重新 #ncm登录")
-                return
-            task["busy"] = True
-            try:
-                body = await ncmapi.qr_check(key, user_key=user_key)
-                code = (body or {}).get("code")
-                if code == 800:
-                    task["stopped"] = True
-                    self.active_logins.pop(user_key, None)
-                    await self.reply(event, "二维码已失效，请重新 #ncm登录")
-                    return
-                if code == 802 and not task["notifiedScan"]:
-                    task["notifiedScan"] = True
-                    await self.reply(event, "已扫码，请在手机上确认登录")
-                elif code == 803:
-                    await self.finish_login(event, body, user_key, task)
-                    return
-                task["failStreak"] = 0
-            except Exception as err:
-                task["failStreak"] += 1
-                if task["failStreak"] == 5:
-                    await self.reply(event, f"轮询暂时失败：{err}（继续重试）")
-                if task["failStreak"] >= 25:
-                    task["stopped"] = True
-                    self.active_logins.pop(user_key, None)
-                    await self.reply(
-                        event, "轮询失败过多，请检查 API 服务或重新 #ncm登录"
-                    )
-                    return
-            finally:
-                task["busy"] = False
-            if (
-                not task["stopped"]
-                and self.active_logins.get(user_key, {}).get("key") == key
-            ):
-                task["timer"] = _schedule(2)
-
-        task["timer"] = _schedule(2)
-
-    async def finish_login(
-        self, event: AstrMessageEvent, body: dict, user_key: str, task: dict
-    ):
-        task["stopped"] = True
-        self.active_logins.pop(user_key, None)
-        cookie = (body or {}).get("cookie") or ""
-        nickname = (body or {}).get("nickname") or ""
-        if not cookie:
-            await self.reply(
-                event, "登录成功但未获取到 Cookie（可能登录状态异常），请重新 #ncm登录"
-            )
-            return
-        try:
-            self.plugin.config["defaultCookie"] = cookie
-            self.plugin.config.save_config()
-            self.log_info("扫码登录成功，Cookie 已写入插件配置 defaultCookie")
-        except Exception as e:
-            self.log_warn(f"写入默认 Cookie 失败: {e}")
-        await self.reply(
-            event,
-            f"✅ 登录成功：{nickname or '已写入 Cookie'}\nCookie 已存入插件配置，全群默认使用该账号",
-        )
-        st = None
-        try:
-            st = await ncmapi.login_status(user_key=user_key)
-            profile = st.get("profile") or {}
-            if profile and profile.get("userId"):
-                self.plugin.config["defaultUid"] = str(profile["userId"])
-                self.plugin.config.save_config()
-        except Exception:
-            pass
-        await self.send_status(event, user_key, status_data=st)
-
-    async def build_status(
-        self, user_key: str, *, status_data: dict | None = None
-    ) -> dict:
-        cfg = self.cfg()
-        default_cookie = str(cfg.get("defaultCookie") or "")
-        status = {
-            "loggedIn": False,
-            "nickname": "",
-            "avatar": "",
-            "uin": "",
-            "level": "",
-            "vipType": 0,
-            "vipLevel": 0,
-            "vipExpire": 0,
-            "apiBase": cfg.get("apiBase") or "",
-            "keyStatus": "默认 Cookie" if default_cookie else "无 Cookie",
-            "quality": str(cfg.get("quality") or "auto"),
-        }
-        if status_data is not None:
-            st = status_data
-        else:
-            try:
-                st = await ncmapi.login_status(user_key=user_key)
-            except ApiError as e:
-                status["keyStatus"] = f"查询失败：{e}"
-                return status
-        profile = st.get("profile") or {}
-        account = st.get("account") or {}
-        if profile and profile.get("userId"):
-            status["loggedIn"] = True
-            status["nickname"] = profile.get("nickname") or ""
-            status["avatar"] = profile.get("avatarUrl") or ""
-            status["uin"] = str(profile.get("userId") or "")
-            lv = profile.get("level") or 0
-            status["level"] = str(lv) if lv else ""
-            status["vipType"] = int(
-                profile.get("vipType") or account.get("vipType") or 0
-            )
-            status["vipLevel"] = 0
-            status["vipExpire"] = 0
-            try:
-                vip = await ncmapi.vip_info(user_key=user_key)
-                vd = (vip or {}).get("data") or {}
-                status["vipLevel"] = int(vd.get("redVipLevel") or 0)
-                status["vipExpire"] = int(
-                    (vd.get("redplus") or {}).get("expireTime") or 0
-                )
-            except ApiError:
-                pass
-        elif default_cookie:
-            status["keyStatus"] = "Cookie 已失效或未写入（登录态 301）"
-        return status
+    def start_poll(self, event: AstrMessageEvent, key: str, max_sec: int = 300):
+        """开始扫码轮询（实现见 core/login.py）。"""
+        loginlib.start_poll(self, event, key, max_sec)
 
     async def send_status(
         self,
@@ -952,102 +788,50 @@ class MusicService:
         *,
         status_data: dict | None = None,
     ):
-        try:
-            status = await self.build_status(user_key, status_data=status_data)
-            data = cardlib.build_status_card_data(status)
-            await self.reply_card_or_text(
-                event,
-                tpl_name="ncm-status",
-                data=data,
-                format_text=lambda d: cardlib.format_status_text(status),
-            )
-        except Exception as err:
-            self.log_warn(f"状态卡片失败: {err}")
-            await self.reply(
-                event,
-                cardlib.format_status_text(
-                    {
-                        "loggedIn": False,
-                        "apiBase": self.cfg().get("apiBase") or "",
-                        "quality": str(self.cfg().get("quality") or "auto"),
-                        "keyStatus": str(err),
-                    }
-                ),
-            )
+        """发送状态卡片（实现见 core/panels.py）。"""
+        await panellib.send_status(self, event, user_key, status_data=status_data)
 
     async def handle_resolve(self, event: AstrMessageEvent, text: str) -> bool:
-        user_key = self.user_key(event)
+        """解析分享链接/卡片（实现见 core/resolve.py）。"""
+        return await resolvelib.handle_resolve(self, event, text)
+
+    async def initialize(self):
+        """预热：把 ffmpeg 路径探测（遍历 PATH 的阻塞 IO）挪出首次投递的事件循环。"""
+        from .delivery import probe_ffmpeg_path
+
         try:
-            text = await ncmapi.expand_short_links(text)
-            m = re.search(r"playlist\?(?:[^&\s]*&)*id=(\d+)|playlist/(\d+)", text)
-            if m:
-                pid = int(m.group(1) or m.group(2))
-                songs = await ncmapi.playlist_tracks(pid, user_key=user_key)
-                if not songs:
-                    await self.reply(event, "歌单暂无曲目或不存在")
-                    return True
-                shown = songs[:30]
-                await self.list_to_session(
-                    event,
-                    "链接解析 · 歌单",
-                    shown,
-                    tip=f"歌单共 {len(songs)} 首，显示前 {len(shown)} 首",
-                )
-                return True
-            m = re.search(r"album\?(?:[^&\s]*&)*id=(\d+)|album/(\d+)", text)
-            if m:
-                aid = int(m.group(1) or m.group(2))
-                album_info, songs = await ncmapi.album_detail(aid, user_key=user_key)
-                if not songs:
-                    await self.reply(event, "专辑暂无曲目或不存在")
-                    return True
-                info = album_info or {}
-                await self.list_to_session(
-                    event, f"链接解析 · {info.get('name') or '专辑'}", songs[:30]
-                )
-                return True
-            m = re.search(r"song\?(?:[^&\s]*&)*id=(\d+)|song/(\d+)", text)
-            if m:
-                sid = int(m.group(1) or m.group(2))
-                lst = await ncmapi.song_detail([sid], user_key=user_key)
-                if not lst:
-                    await self.reply(event, "歌曲不存在或无版权")
-                    return True
-                await self.play_song(
-                    event, lst[0], user_key=user_key, source="链接解析"
-                )
-                return True
-            # 仅在文本里确实存在网易云分享域名（链接/卡片）时才做关键词兜底搜索。
-            # 避免只含「网易云音乐」等字样、但没有真实分享链接的消息（例如登录提示文案）
-            # 被误判为点歌请求而自动发送一首歌。
-            if not re.search(
-                r"music\.163\.com|163music\.com|163cn\.tv|y\.music\.163\.com",
-                text,
-                re.IGNORECASE,
-            ):
-                return False
-            kw = re.sub(r"https?://\S+|\[CQ:[^\]]*\]", "", text).strip()
-            kw = re.sub(
-                r"music\.163\.com|163music\.com|网易云音乐|分享|歌曲|链接",
-                "",
-                kw,
-                flags=re.IGNORECASE,
-            ).strip()
-            if len(kw) >= 2:
-                lst = await ncmapi.search(kw, type_=1, limit=1, user_key=user_key)
-                if lst:
-                    await self.play_song(
-                        event, lst[0], user_key=user_key, source="链接解析"
-                    )
-                    return True
-            return False
-        except ApiError as err:
-            self.log_warn(f"解析失败: {err}")
-            await self.reply(event, f"解析失败：{err}")
-            return True
+            await asyncio.to_thread(probe_ffmpeg_path)
+        except Exception as e:  # noqa: BLE001  预热失败不影响后续按需探测
+            self.log_warn(f"ffmpeg 预热失败: {e}")
 
     async def terminate(self):
         for user_key in list(self.active_logins.keys()):
             self.stop_poll(user_key)
+        # 取消后台任务（临时文件清理等），避免旧实例的定时器在重载后继续跑。
+        # 被取消的清理回调不会再执行，所以先取出已登记的路径，取消后立即补删：
+        # 否则已排期的临时文件（音频/卡片图）会永远留在 tempDir。
+        pending_files = list(self._cleanup_paths.values())
+        tasks = list(self._bg_tasks)
+        for task in tasks:
+            task.cancel()
+        # 等待被取消的任务真正退出后再关会话/浏览器：取消只投递信号，
+        # in-flight 的请求/下载可能还握着 aiohttp 会话（关了会报 Session is closed）
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._cleanup_paths.clear()
+        now = time.time()
+        for path, registered_at in pending_files:
+            # 登记不足宽限期的条目可能正处于「已登记、但发送方仍在读盘」的窗口
+            # （卡片图在 send_chain 之前就登记）：立即补删会删掉正在发送的文件，
+            # 故跳过；它们仍留在 tempDir，不会被别的清理路径误删。
+            if now - registered_at < CLEANUP_CANCEL_GRACE_SEC:
+                continue
+            # best-effort：删除失败（已被删除/占用）静默忽略
+            await asyncio.to_thread(self.safe_unlink, path)
         # 关闭复用的 aiohttp 会话，避免热重载后残留连接
         await ncmapi.close_session()
+        # 关闭常驻 Chromium（渲染环境缺失时静默跳过）
+        try:
+            await close_browser()
+        except Exception as e:  # noqa: BLE001
+            self.log_warn(f"关闭渲染浏览器失败: {e}")

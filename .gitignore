@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+data/
+.pytest_cache/
+.ruff_cache/
+_smoke_test.py

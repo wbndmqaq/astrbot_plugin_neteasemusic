@@ -258,22 +258,22 @@
       <div class="hero">
         <div class="hero-top">
           <div class="hero-main">
-            {{if data.cover}}
-            <img class="cover" src="{{data.cover}}" referrerpolicy="no-referrer" />
-            {{else}}
+            {% if data.cover %}
+            <img class="cover" src="{{ data.cover }}" referrerpolicy="no-referrer" />
+            {% else %}
             <div class="cover ph">♪</div>
-            {{/if}}
+            {% endif %}
             <div class="hero-text">
               <div class="eyebrow">NCM MUSIC</div>
-              <div class="song-name">{{data.songName}}</div>
-              <div class="song-singer">{{data.singerName}}</div>
-              {{if data.albumName}}<div class="song-album">专辑 · {{data.albumName}}</div>{{/if}}
+              <div class="song-name">{{ data.songName }}</div>
+              <div class="song-singer">{{ data.singerName }}</div>
+              {% if data.albumName %}<div class="song-album">专辑 · {{ data.albumName }}</div>{% endif %}
             </div>
           </div>
           <div class="hero-pills">
-            <div class="pill {{data.payplay ? 'pay' : ''}}">{{data.payplay ? 'VIP/付费' : '免费'}}</div>
-            {{if data.qualityLabel}}<div class="pill">{{data.qualityLabel}}</div>{{/if}}
-            {{if data.source}}<div class="pill">{{data.source}}</div>{{/if}}
+            <div class="pill {{ ('pay' if data.payplay else '') }}">{{ ('VIP/付费' if data.payplay else '免费') }}</div>
+            {% if data.qualityLabel %}<div class="pill">{{ data.qualityLabel }}</div>{% endif %}
+            {% if data.source %}<div class="pill">{{ data.source }}</div>{% endif %}
           </div>
         </div>
       </div>
@@ -281,11 +281,11 @@
       <div class="body">
         <div class="meta-row">
           <div class="meta">
-            <div class="meta-num">{{data.duration || '--:--'}}</div>
+            <div class="meta-num">{{ ('--:--' if not data.duration else data.duration) }}</div>
             <div class="meta-label">时长</div>
           </div>
           <div class="meta">
-            <div class="meta-num">{{data.songId || '-'}}</div>
+            <div class="meta-num">{{ ('-' if not data.songId else data.songId) }}</div>
             <div class="meta-label">歌曲 ID</div>
           </div>
           <div class="meta">
@@ -295,12 +295,12 @@
         </div>
 
         <div class="tips">
-          <div class="tips-title"><span>!</span>{{data.payplay ? '付费提示' : '播放提示'}}</div>
-          <div class="tips-body">{{data.tip || '正在获取播放链接…'}}</div>
+          <div class="tips-title"><span>!</span>{{ ('付费提示' if data.payplay else '播放提示') }}</div>
+          <div class="tips-body">{{ ('正在获取播放链接…' if not data.tip else data.tip) }}</div>
         </div>
 
         <div class="footer">
-          <div class="footer-left">{{data.songName}} · {{data.singerName}}</div>
+          <div class="footer-left">{{ data.songName }} · {{ data.singerName }}</div>
           <div class="footer-right">astrbot_plugin_neteasemusic</div>
         </div>
       </div>

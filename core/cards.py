@@ -1,10 +1,21 @@
 from __future__ import annotations
 
+import asyncio
+import datetime
 import json
 import re
 import time
+import unicodedata
 from urllib.parse import urlparse
 
+from .api import as_int
+from .help_data import HELP_PLAIN_FOOTER, HELP_SECTIONS, PLAIN_HELP_COL  # noqa: F401  再导出保持历史路径
+from .messages import (
+    LABEL_QUALITY_PREFIX,
+    MSG_LYRIC_TIP,
+    TIP_HELP,
+    TIP_PLAYLIST_SEARCH,
+)
 from .quality import QUALITY_LABEL
 
 # ──────────── 会话存储 ────────────
@@ -12,6 +23,8 @@ from .quality import QUALITY_LABEL
 
 class SessionStore:
     _mem: dict = {}
+    # 写盘串行锁（见 set()）：保证 KV 落盘顺序与调用顺序一致
+    _write_lock = asyncio.Lock()
     TTL = 600
     # 内存缓存条数上限：防止大量群/私聊会话长期驻留导致无界增长。
     # 超过上限时按 updatedAt 淘汰最旧条目（数据已持久化到 KV，淘汰不丢数据）。
@@ -29,18 +42,20 @@ class SessionStore:
             cls._mem.pop(k, None)
 
     @classmethod
-    def _key(cls, scope: str) -> str:
-        return f"ncm:song:{scope}"
+    def _key(cls, scope: str, kind: str = "songs") -> str:
+        """KV 键：默认的歌曲会话沿用历史键名，避免老数据失效。"""
+        return f"ncm:song:{scope}" if kind == "songs" else f"ncm:sess:{kind}:{scope}"
 
     @classmethod
-    async def get(cls, plugin, scope: str) -> dict | None:
-        k = cls._key(scope)
-        mem_val = cls._mem.get(str(scope))
+    async def get(cls, plugin, scope: str, kind: str = "songs") -> dict | None:
+        k = cls._key(scope, kind)
+        mem_key = f"{kind}:{scope}"
+        mem_val = cls._mem.get(mem_key)
         if mem_val:
             ts = mem_val.get("updatedAt") or 0
             if time.time() - ts < cls.TTL:
                 return mem_val
-            cls._mem.pop(str(scope), None)
+            cls._mem.pop(mem_key, None)
         try:
             raw = await plugin.get_kv_data(k, None)
             if raw:
@@ -48,6 +63,9 @@ class SessionStore:
                     raw = json.loads(raw)
                 ts = raw.get("updatedAt") or 0
                 if time.time() - ts < cls.TTL:
+                    # 命中 KV 时回填内存，避免同一会话每次都读一次 KV
+                    cls._mem[mem_key] = raw
+                    cls._evict_if_needed()
                     return raw
                 await plugin.delete_kv_data(k)
         except Exception:
@@ -55,14 +73,27 @@ class SessionStore:
         return None
 
     @classmethod
-    async def set(cls, plugin, scope: str, session: dict, ttl_sec: int = TTL) -> dict:
-        data = {"group_id": scope, "updatedAt": time.time(), **session}
+    async def set(cls, plugin, scope: str, session: dict, kind: str = "songs") -> dict:
+        # 新时间戳必须最后落键：调用方常传 dict(旧会话)（其中携带旧 updatedAt），
+        # 若 time.time() 排在 session 展开之前会被旧值覆盖——TTL 便会锚定首次写入，
+        # 「读→改→写回」不再续期，用户会遇到一次静默无响应
+        data = {"group_id": scope, **session, "updatedAt": time.time()}
+        mem_key = f"{kind}:{scope}"
+        cls._mem[mem_key] = data
+        # 插入后再淘汰，容量严格不超过 MAX_MEM
         cls._evict_if_needed()
-        cls._mem[str(scope)] = data
-        try:
-            await plugin.put_kv_data(cls._key(scope), json.dumps(data, ensure_ascii=False))
-        except Exception:
-            pass
+        # 写盘串行化：KV 写入顺序与调用顺序一致，避免同 scope 并发写时
+        # 后落盘的旧值覆盖新值（等待期间若已被更新的一次写入替代，则本次跳过）
+        async with cls._write_lock:
+            current = cls._mem.get(mem_key)
+            if current is not None and current.get("updatedAt", 0) > data["updatedAt"]:
+                return data
+            try:
+                await plugin.put_kv_data(
+                    cls._key(scope, kind), json.dumps(data, ensure_ascii=False)
+                )
+            except Exception:
+                pass
         return data
 
 
@@ -95,7 +126,7 @@ def api_hint_for(cfg: dict) -> str:
 
 
 def fmt_count(n: float) -> str:
-    n = int(n or 0)
+    n = as_int(n, 0)
     if n >= 10000:
         return f"{n / 10000:.1f}万"
     return str(n)
@@ -163,7 +194,7 @@ def format_detail_text(song: dict, play: dict | None = None, tip: str = "") -> s
     lines = [
         f"♪ {song.get('name') or '未知'} - {song.get('artist') or '未知'}{_pay_tag(song)}",
         f"专辑：{song.get('album') or ''}" if song.get("album") else "",
-        f"音质：{quality_label}" if quality_label else "",
+        f"{LABEL_QUALITY_PREFIX}{quality_label}" if quality_label else "",
     ]
     if tip:
         lines.append(tip)
@@ -193,7 +224,7 @@ def format_status_text(status: dict) -> str:
             lines.append(f"等级：{lv}")
         vip = _vip_label(status.get("vipType"), status.get("vipExpire"))
         if vip:
-            lv = int(status.get("vipLevel") or 0)
+            lv = as_int(status.get("vipLevel"), 0)
             lines.append(f"会员：{vip}" + (f" Lv.{lv}" if lv else ""))
     else:
         lines.append("❌ 未登录")
@@ -207,68 +238,46 @@ def format_status_text(status: dict) -> str:
     return "\n".join(lines)
 
 
+def _display_width(s: str) -> int:
+    """字符串显示宽度（东亚全角按 2 计），纯文本帮助用它对齐命令列。"""
+    return sum(
+        2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+        for ch in str(s or "")
+    )
+
+
+def _plain_help_line(item: dict, col: int) -> str:
+    """把一条帮助数据渲染成纯文本行。
+
+    ``plain`` 为逐字保留的历史整行（合并行 / 超宽行）；否则用
+    ``plain_name`` / ``plain_desc``（缺省回落到卡片字段）左对齐到
+    ``item['plain_col']`` 或分组列 ``col``。
+    """
+    if item.get("plain") is not None:
+        return item["plain"]
+    name = item.get("plain_name") or item.get("name") or ""
+    desc = item.get("plain_desc") or item.get("desc") or ""
+    col = item.get("plain_col") or col
+    return f"{name}{' ' * max(1, col - _display_width(name))}{desc}"
+
+
 def format_help_text(cfg: dict, version: str = "") -> str:
+    """帮助纯文本：与帮助卡片同源（HELP_SECTIONS），不再各维护一份指令清单。"""
     api_hint = api_hint_for(cfg) if cfg.get("apiBase") else "⚠ API 未配置"
     lines = [
         f"🎵 网易云音乐插件 v{version}" if version else "🎵 网易云音乐插件",
         f"「{api_hint}」",
-        "",
-        "── 点歌播放 ──",
-        "#ncm点歌 关键词       搜索并列出歌曲",
-        "#ncm听N               播放列表第 N 首（可只发 #听N）",
-        "#ncm播放 关键词       搜索并直接播放第一首",
-        "#ncm歌词 关键词|id    获取歌词",
-        "#ncm热搜              热搜榜",
-        "",
-        "── 发现音乐 ──",
-        "#ncm排行 [榜单名]     排行榜列表 / 查看具体榜单",
-        "#ncm歌手 关键词       歌手热门歌曲",
-        "#ncm专辑 关键词       专辑曲目",
-        "#ncm歌单 关键词       歌单曲目",
-        "#ncm评论 关键词       歌曲热评",
-        "#ncm相似 关键词|id    相似歌曲",
-        "#ncm相关歌单 歌单名|id 相关歌单推荐",
-        "#ncm新歌 [华语/欧美/日本/韩国]  新歌速递",
-        "#ncm精品歌单 [分类]   精品歌单",
-        "#ncm搜索建议 关键词   关键词补全",
-        "#ncmbanner            首页轮播",
-        "#ncm歌单分类          歌单分类",
-        "#ncmMV 关键词          MV 详情与播放链接",
-        "#ncm相似歌单 关键词|id 相似歌单",
-        "#ncm歌手榜 / #ncm热门歌手   歌手榜 / 热门歌手",
-        "#ncm新碟 / #ncm新碟榜 [地区] 新碟上架 / 新碟排行",
-        "#ncmMV榜               MV 排行",
-        "#ncm电台               电台推荐",
-        "#ncm歌单榜 [分类]      分类歌单榜",
-        "#ncm热门分类           热门歌单分类",
-        "#ncm逐字歌词 关键词|id  逐字歌词",
-        "#ncm歌单评论/专辑评论   歌单/专辑热评",
-        "#ncm推荐              推荐歌单（需登录）",
-        "#ncm来首歌            随机来一首",
-        "#ncm日推              每日推荐（需登录）",
-        "#ncm推荐新歌          推荐新歌",
-        "#ncm喜欢              我喜欢的音乐（需登录）",
-        "#ncm听歌排行          本周听歌排行（需登录）",
-        "#ncm历史日推          历史每日推荐（需登录）",
-        "#ncm签到 / #ncm云盘 / #ncm最近 / #ncm我的歌单 / #ncm红心 关键词 / #ncm取消红心 关键词  （需登录）",
-        "",
-        "── 账号状态 ──",
-        "#ncm登录              扫码登录",
-        "#ncm状态 / #ncms      登录状态",
-        "#ncm登出              登出",
-        "",
-        "── 管理（主人） ──",
-        "#ncm设置              设置面板",
-        "#ncm音质 <档位>       修改音质",
-        "#ncm api <地址>       修改 API 地址",
-        "#ncm 开启/关闭 点歌|解析  开关功能",
-        "#ncm测试              测试 API 连通",
-        "",
-        "── 自动解析 ──",
-        "发送 music.163.com / 163music.com / 163cn.tv 链接自动解析播放",
-        "",
-        "Tips：发送网易云分享卡片/链接（含 163cn.tv 短链）即可自动解析；VIP 歌曲自动解灰。",
     ]
+    for sec in HELP_SECTIONS:
+        if not sec.get("plain_no_head", False):
+            lines.append("")
+            lines.append(f"── {sec.get('plain_title') or sec['title']} ──")
+        col = sec.get("plain_col") or PLAIN_HELP_COL
+        for item in sec["items"]:
+            if item.get("plain_skip"):
+                continue
+            lines.append(_plain_help_line(item, col))
+    lines.extend(HELP_PLAIN_FOOTER)
     return "\n".join(lines)
 
 
@@ -305,7 +314,6 @@ def build_list_card_data(keyword: str, songs: list, options: dict | None = None,
 
 def build_detail_card_data(song: dict, quality_label: str = "", source: str = "", tip: str = "") -> dict:
     return {
-        "title": f"{song.get('name') or ''} - {song.get('artist') or ''}",
         "songName": _clean_name(song.get("name")),
         "singerName": _clean_name(song.get("artist")),
         "albumName": _clean_name(song.get("album")),
@@ -314,7 +322,6 @@ def build_detail_card_data(song: dict, quality_label: str = "", source: str = ""
         "duration": song.get("duration") or "",
         "qualityLabel": quality_label or "",
         "payplay": bool(song.get("payplay")),
-        "trial": bool(song.get("trial")),
         "source": source or "",
         "tip": tip or "",
     }
@@ -349,7 +356,7 @@ def build_playlist_card_data(
         "total": len(items),
         "totalPlay": fmt_count(sum(int(p.get("playCount") or 0) for p in playlists)),
         "items": items,
-        "tip": tip or "发送 #ncm歌单 歌单名 查看曲目",
+        "tip": tip or TIP_PLAYLIST_SEARCH,
         "tipTitle": tip_title,
         "apiHint": api_hint_for(cfg),
     }
@@ -363,7 +370,7 @@ def format_playlist_text(title: str, playlists: list, tip: str = "") -> str:
             f"{p.get('index') or 0}. {p.get('name') or '未知'}（{fmt_count(p.get('playCount') or 0)}播放 · {p.get('trackCount') or 0}首）"
         )
     lines.append("")
-    lines.append(tip or "发送 #ncm歌单 歌单名 查看曲目")
+    lines.append(tip or TIP_PLAYLIST_SEARCH)
     return "\n".join(lines)
 
 
@@ -401,7 +408,7 @@ def build_generic_card_data(
         "statMid": stat_mid,
         "statMidLabel": stat_mid_label,
         "items": out,
-        "tip": tip or "发送 #ncm帮助 查看全部指令",
+        "tip": tip or TIP_HELP,
         "tipTitle": tip_title,
         "apiHint": api_hint_for(cfg),
     }
@@ -418,7 +425,7 @@ def format_generic_text(title: str, items: list, tip: str = "") -> str:
             line += f"（{sub}）"
         lines.append(line)
     lines.append("")
-    lines.append(tip or "发送 #ncm帮助 查看全部指令")
+    lines.append(tip or TIP_HELP)
     return "\n".join(lines)
 
 
@@ -427,11 +434,9 @@ def build_lyric_card_data(song: dict, lines: list, line_count: int = 0) -> dict:
         "songName": _clean_name(song.get("name")),
         "singerName": _clean_name(song.get("artist")),
         "cover": song.get("cover") or "",
-        "albumName": _clean_name(song.get("album")),
-        "songId": song.get("id") or 0,
         "lines": lines,
         "lineCount": line_count,
-        "tip": "歌词来自网易云音乐",
+        "tip": MSG_LYRIC_TIP,
     }
 
 
@@ -465,8 +470,6 @@ def clean_comment_text(s: str) -> str:
 
 def format_comment_time(ts_ms: int) -> str:
     try:
-        import datetime
-
         return datetime.datetime.fromtimestamp(ts_ms / 1000).strftime("%Y-%m-%d")
     except Exception:
         return ""
@@ -478,7 +481,6 @@ def build_comment_card_data(song: dict, comments: list, total: int = 0) -> dict:
         nick = c.get("nick") or ""
         items.append(
             {
-                "index": c.get("index") or 0,
                 "nick": nick,
                 "avatar": c.get("avatar") or "",
                 "avatarPh": nick[:1] if nick else "♪",
@@ -492,136 +494,44 @@ def build_comment_card_data(song: dict, comments: list, total: int = 0) -> dict:
         "songName": _clean_name(song.get("name")),
         "singerName": _clean_name(song.get("artist")),
         "cover": song.get("cover") or "",
-        "albumName": _clean_name(song.get("album")),
-        "songId": song.get("id") or 0,
         "comments": items,
         "total": total or len(comments),
         "tip": "评论来自网易云音乐",
     }
 
 
-def build_help_card_data(version: str = "", cfg: dict | None = None) -> dict:
+def build_help_card_data(
+    version: str = "", cfg: dict | None = None, *, stat_commands: str = ""
+) -> dict:
+    """帮助卡片数据（数据源见 HELP_SECTIONS）。
+
+    ``stat_commands`` 由调用方传入真实指令路由数（``len(handlers.ALL_ROUTES)``），
+    不再硬编码统计数字。
+    """
     cfg = cfg or {}
     return {
-        "version": version or "1.0.0",
-        "statCommands": "50+",
+        "version": version or "?",
+        "statCommands": stat_commands,
         "statQuality": str(cfg.get("quality") or "auto"),
         "apiHint": api_hint_for(cfg),
         "tip": "发送网易云分享卡片/链接自动解析；VIP 歌曲自动解灰；语音/文件投递可配置。",
         "sections": [
             {
-                "title": "点歌播放",
-                "tag": "全员可用",
-                "items": [
-                    {"name": "#ncm点歌 关键词", "desc": "搜索并列出歌曲列表", "example": "#ncm点歌 晴天"},
-                    {"name": "#ncm听N", "desc": "播放列表第 N 首", "example": "#ncm听1"},
-                    {"name": "#ncm听所有", "desc": "依次连播当前列表全部歌曲（上限 30 首）", "example": "#ncm听所有"},
-                    {"name": "#ncm播放 关键词", "desc": "搜索并直接播放第一首", "example": "#ncm播放 晴天"},
-                    {"name": "#ncm歌词 关键词", "desc": "获取歌词", "example": "#ncm歌词 晴天"},
-                    {"name": "#ncm热搜", "desc": "热搜榜", "example": "#ncm热搜"},
-                ],
-            },
-            {
-                "title": "发现音乐",
-                "tag": "全员可用",
-                "items": [
-                    {"name": "#ncm排行 [榜单名]", "desc": "排行榜列表 / 具体榜单", "example": "#ncm排行 飙升榜"},
-                    {"name": "#ncm歌手 关键词", "desc": "歌手热门歌曲", "example": "#ncm歌手 周杰伦"},
-                    {"name": "#ncm专辑 关键词", "desc": "专辑曲目", "example": "#ncm专辑 叶惠美"},
-                    {"name": "#ncm歌单 关键词", "desc": "歌单曲目", "example": "#ncm歌单 华语"},
-                    {"name": "#ncm评论 关键词", "desc": "歌曲热评", "example": "#ncm评论 晴天"},
-                    {"name": "#ncm相似 关键词|id", "desc": "相似歌曲", "example": "#ncm相似 晴天"},
-                    {"name": "#ncm相关歌单 歌单名|id", "desc": "相关歌单推荐", "example": "#ncm相关歌单 华语"},
-                    {"name": "#ncm新歌 [地区]", "desc": "新歌速递（华语/欧美/日本/韩国）", "example": "#ncm新歌 华语"},
-                    {"name": "#ncm精品歌单 [分类]", "desc": "精品歌单", "example": "#ncm精品歌单 华语"},
-                    {"name": "#ncm搜索建议 关键词", "desc": "关键词补全", "example": "#ncm搜索建议 晴天"},
-                    {"name": "#ncmbanner", "desc": "首页轮播", "example": "#ncmbanner"},
-                    {"name": "#ncm歌单分类", "desc": "歌单分类列表", "example": "#ncm歌单分类"},
-                    {"name": "#ncmMV 关键词", "desc": "MV 详情与播放链接", "example": "#ncmMV 晴天"},
-                    {"name": "#ncm相似歌单 关键词|id", "desc": "相似歌单", "example": "#ncm相似歌单 晴天"},
-                    {"name": "#ncm歌手榜", "desc": "歌手榜", "example": "#ncm歌手榜"},
-                    {"name": "#ncm热门歌手", "desc": "热门歌手", "example": "#ncm热门歌手"},
-                    {"name": "#ncm新碟", "desc": "新碟上架", "example": "#ncm新碟"},
-                    {
-                        "name": "#ncm新碟榜 [地区]",
-                        "desc": "新碟排行（华语/欧美/韩国/日本）",
-                        "example": "#ncm新碟榜 华语",
-                    },
-                    {"name": "#ncmMV榜", "desc": "MV 排行", "example": "#ncmMV榜"},
-                    {"name": "#ncm电台", "desc": "电台推荐", "example": "#ncm电台"},
-                    {"name": "#ncm歌单榜 [分类]", "desc": "分类歌单榜", "example": "#ncm歌单榜 华语"},
-                    {"name": "#ncm热门分类", "desc": "热门歌单分类", "example": "#ncm热门分类"},
-                    {"name": "#ncm逐字歌词 关键词|id", "desc": "逐字歌词", "example": "#ncm逐字歌词 晴天"},
-                    {"name": "#ncm歌单评论 关键词", "desc": "歌单热评", "example": "#ncm歌单评论 华语"},
-                    {"name": "#ncm专辑评论 关键词", "desc": "专辑热评", "example": "#ncm专辑评论 叶惠美"},
-                ],
-            },
-            {
-                "title": "推荐（需登录）",
-                "tag": "全员可用",
-                "items": [
-                    {"name": "#ncm推荐", "desc": "推荐歌单", "example": "#ncm推荐"},
-                    {"name": "#ncm来首歌", "desc": "随机来一首", "example": "#ncm来首歌"},
-                    {"name": "#ncm日推", "desc": "每日推荐", "example": "#ncm日推"},
-                    {"name": "#ncm推荐新歌", "desc": "推荐新歌", "example": "#ncm推荐新歌"},
-                    {"name": "#ncm喜欢", "desc": "我喜欢的音乐", "example": "#ncm喜欢"},
-                    {"name": "#ncm听歌排行", "desc": "本周听歌排行", "example": "#ncm听歌排行"},
-                    {"name": "#ncm历史日推", "desc": "历史每日推荐", "example": "#ncm历史日推"},
-                ],
-            },
-            {
-                "title": "账号扩展",
-                "tag": "需登录",
-                "items": [
-                    {"name": "#ncm签到", "desc": "每日签到领经验", "example": "#ncm签到"},
-                    {"name": "#ncm云盘", "desc": "我的云盘歌曲", "example": "#ncm云盘"},
-                    {"name": "#ncm最近", "desc": "最近播放歌曲", "example": "#ncm最近"},
-                    {"name": "#ncm我的歌单", "desc": "我创建/收藏的歌单", "example": "#ncm我的歌单"},
-                    {
-                        "name": "#ncm红心 关键词",
-                        "desc": "红心/取消红心（自动判断当前状态）",
-                        "example": "#ncm红心 晴天",
-                    },
-                    {
-                        "name": "#ncm取消红心 关键词",
-                        "desc": "直接取消红心（不查状态）",
-                        "example": "#ncm取消红心 晴天",
-                    },
-                ],
-            },
-            {
-                "title": "账号状态",
-                "tag": "全员可用",
-                "items": [
-                    {"name": "#ncm登录", "desc": "扫码登录", "example": "#ncm登录"},
-                    {"name": "#ncm状态 / #ncms", "desc": "查看登录状态", "example": "#ncms"},
-                    {"name": "#ncm登出", "desc": "登出", "example": "#ncm登出"},
-                ],
-            },
-            {
-                "title": "管理",
-                "tag": "主人",
-                "items": [
-                    {"name": "#ncm设置", "desc": "设置面板", "example": "#ncm设置"},
-                    {"name": "#ncm音质 <档位>", "desc": "修改音质", "example": "#ncm音质 lossless"},
-                    {"name": "#ncm api <地址>", "desc": "修改 API 地址", "example": "#ncm api http://127.0.0.1:3000"},
-                    {"name": "#ncm 开启/关闭 点歌|解析", "desc": "功能开关", "example": "#ncm 关闭 解析"},
-                    {"name": "#ncm测试", "desc": "测试 API 连通", "example": "#ncm测试"},
-                ],
-            },
-            {
-                "title": "自动解析",
-                "tag": "自动",
+                "title": sec["title"],
+                "tag": sec["tag"],
                 "items": [
                     {
-                        "name": "网易云链接",
-                        "desc": "music.163.com / 163music.com / 163cn.tv 短链自动解析",
-                        "example": "music.163.com/#/song?id=186016",
-                    },
+                        "name": item["name"],
+                        "desc": item["desc"],
+                        "example": item["example"],
+                    }
+                    for item in sec["items"]
                 ],
-            },
+            }
+            for sec in HELP_SECTIONS
         ],
     }
+
 
 
 def _vip_label(vip_type, vip_expire: int = 0) -> str:
@@ -645,8 +555,8 @@ def _vip_label(vip_type, vip_expire: int = 0) -> str:
 
 def build_status_card_data(status: dict) -> dict:
     nickname = status.get("nickname") or ""
-    vip_type = int(status.get("vipType") or 0)
-    vip_expire = int(status.get("vipExpire") or 0)
+    vip_type = as_int(status.get("vipType"), 0)
+    vip_expire = as_int(status.get("vipExpire"), 0)
     vip_label = _vip_label(vip_type, vip_expire)
     # level 为 0 / "0" / 空 时一律置空，卡片不显示 "Lv.0"（注意字符串 "0" 也是 truthy）
     raw_level = status.get("level")
@@ -663,10 +573,9 @@ def build_status_card_data(status: dict) -> dict:
         "avatarPh": nickname[:1] or "♪",
         "uin": status.get("uin") or "",
         "level": level,
-        "vip": vip_type,
         "vipLabel": vip_label,
         "vipGold": vip_label == "黑胶SVIP",
-        "vipLevel": int(status.get("vipLevel") or 0),
+        "vipLevel": as_int(status.get("vipLevel"), 0),
         "apiBase": mask_api_base(status.get("apiBase") or ""),
         "keyStatus": status.get("keyStatus") or "",
         "quality": status.get("quality") or "",
@@ -685,9 +594,8 @@ def build_settings_card_data(cfg: dict, uid: str = "") -> dict:
         "apiHint": api_hint_for(cfg),
         "cookieStatus": f"已配置（***{cookie_tail}）" if default_cookie else "未配置",
         "quality": QUALITY_LABEL.get(q, q),
-        "maxList": int(cfg.get("maxList") or 10),
+        "maxList": as_int(cfg.get("maxList") or 10, 10),
         "loginStatus": (f"有 Cookie · uid={uid}" if uid else ("默认账号" if default_cookie else "未登录")),
-        "loggedIn": bool(uid or default_cookie),
         "toggles": [
             {"name": "点歌", "on": cfg.get("enableSongRequest", True) is not False},
             {"name": "自动解析", "on": cfg.get("enableResolve", True) is not False},
@@ -698,11 +606,11 @@ def build_settings_card_data(cfg: dict, uid: str = "") -> dict:
             {"name": "扫码登录", "on": cfg.get("qrLoginEnable", True) is not False},
         ],
         "commands": [
-            {"cmd": "#ncm音质 &lt;档位&gt;", "desc": "修改音质"},
-            {"cmd": "#ncm api &lt;地址&gt;", "desc": "修改 API 地址"},
-            {"cmd": "#ncm 开启|关闭 点歌|解析", "desc": "功能开关"},
+            # 写裸 < >，交给模板的 autoescape 处理；预转义实体会被二次转义成 &amp;lt;
+            {"cmd": "#ncm音质 <档位>", "desc": "修改音质"},
+            {"cmd": "#ncm api <地址>", "desc": "修改 API 地址"},
+            {"cmd": "#ncm开启点歌 / #ncm关闭解析", "desc": "功能开关"},
         ],
-        "tip": "设置修改即时生效，无需重启",
     }
 
 
@@ -732,6 +640,6 @@ def format_settings_text(cfg: dict, uid: str = "") -> str:
         ),
         f"登录：{('有 Cookie · uid=' + uid) if uid else (('默认账号') if default_cookie else '未登录')}",
         "",
-        "可修改：#ncm音质 <档位> / #ncm api <地址> / #ncm 开启|关闭 点歌|解析",
+        "可修改：#ncm音质 <档位> / #ncm api <地址> / #ncm开启点歌 / #ncm关闭解析",
     ]
     return "\n".join(lines)

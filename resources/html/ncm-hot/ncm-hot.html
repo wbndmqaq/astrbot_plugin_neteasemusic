@@ -253,30 +253,30 @@
           <div class="brand-mark">♪</div>
           <div class="hero-text">
             <div class="eyebrow">NCM HOT</div>
-            <div class="title">{{data.title || '热搜榜'}}</div>
-            <div class="subtitle">{{data.subtitle || '网易云音乐热搜'}}</div>
+            <div class="title">{{ ('热搜榜' if not data.title else data.title) }}</div>
+            <div class="subtitle">{{ ('网易云音乐热搜' if not data.subtitle else data.subtitle) }}</div>
           </div>
-          <div class="version-pill">{{data.total || 0}} 条</div>
+          <div class="version-pill">{{ (0 if not data.total else data.total) }} 条</div>
         </div>
       </div>
 
       <div class="body">
         <div class="hot-list">
-          {{each data.items item}}
+          {% for item in data['items'] %}
           <div class="hot-item">
-            <div class="hot-idx {{item.index <= 3 ? 'top3' : 'other'}}">{{item.index}}</div>
+            <div class="hot-idx {{ ('top3' if item.index <= 3 else 'other') }}">{{ item.index }}</div>
             <div class="hot-main">
-              <div class="hot-word">{{item.word}}</div>
-              {{if item.hot}}<div class="hot-num">{{item.hot}}</div>{{/if}}
+              <div class="hot-word">{{ item.word }}</div>
+              {% if item.hot %}<div class="hot-num">{{ item.hot }}</div>{% endif %}
             </div>
-            <div class="hot-rank">{{item.index <= 3 ? 'HOT' : ''}}</div>
+            <div class="hot-rank">{{ ('HOT' if item.index <= 3 else '') }}</div>
           </div>
-          {{/each}}
+          {% endfor %}
         </div>
 
         <div class="tips">
           <div class="tips-title"><span>!</span>小提示</div>
-          <div class="tips-body">{{data.tip || '发送 #ncm点歌 关键词 直接搜索歌曲'}}</div>
+          <div class="tips-body">{{ ('发送 #ncm点歌 关键词 直接搜索歌曲' if not data.tip else data.tip) }}</div>
         </div>
 
         <div class="footer">

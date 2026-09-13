@@ -1,3 +1,8 @@
 aiohttp>=3.9.0
 jinja2>=3.0.0
+PyYAML>=6.0
+# 卡片渲染用：AstrBot 安装/启用插件时会 pip install 本文件全部条目（含下面这行
+# playwright），但它不会下载 Chromium 内核，内核需手动 `python -m playwright install
+# chromium`（见 README「卡片渲染环境安装教程」）。playwright 或内核缺失时卡片自动
+# 回退纯文本，点歌播放不受影响。
 playwright>=1.40.0

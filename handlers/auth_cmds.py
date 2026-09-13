@@ -9,12 +9,10 @@ from astrbot.api.message_components import Image
 if TYPE_CHECKING:
     from ..core.service import MusicService
 
-try:
-    from ..core import api as ncmapi
-    from ..core.api import ApiError
-except ImportError:
-    from core import api as ncmapi
-    from core.api import ApiError
+from ..core import api as ncmapi
+from ..core.api import ApiError
+from ..core.messages import MSG_SAVE_CONFIG_FAIL
+from ..core.service import QR_IMAGE_KEEP_SEC
 from .base import Route
 
 
@@ -44,17 +42,12 @@ async def start_qr_login(service: MusicService, event: AstrMessageEvent):
         img_sent = False
         if qr_path:
             try:
-                await service.send_chain(
+                img_sent = await service.send_chain(
                     event, Image.fromFileSystem(qr_path), service.plain(tip_text)
                 )
-                img_sent = True
             except Exception:
                 pass
-            import asyncio
-
-            asyncio.get_running_loop().call_later(
-                120, lambda: service.safe_unlink(qr_path)
-            )
+            service.schedule_cleanup(qr_path, QR_IMAGE_KEEP_SEC)
         if not img_sent:
             await service.reply(
                 event, tip_text + (f"\n或打开链接扫码：{qrurl}" if qrurl else "")
@@ -84,7 +77,11 @@ async def logout(service: MusicService, event: AstrMessageEvent):
         if service.plugin.config.get("defaultCookie"):
             service.plugin.config["defaultCookie"] = ""
             service.plugin.config["defaultUid"] = ""
-            service.plugin.config.save_config()
+            ncmapi.clear_privilege_cache()
+            if not await service.save_config():
+                await service.reply(event, MSG_SAVE_CONFIG_FAIL)
+                event.stop_event()
+                return
             await service.reply(event, "已登出网易云账号，并清除插件配置中的默认 Cookie")
         else:
             await service.reply(event, "已登出网易云账号")

@@ -18,7 +18,7 @@
   },
   "enable": {
     "type": "bool",
-    "description": "插件总开关",
+    "description": "插件功能总开关：关闭后点歌、播放、歌词、榜单、解析、登录/状态等指令不再响应（静默）；#ncm帮助、#ncm热搜 等只读指令与 #ncm设置、#ncm音质、#ncm api、#ncm 开启/关闭点歌、#ncm 开启/关闭解析、#ncm测试、#ncm登出 等配置类指令保留，便于自助排查与恢复。",
     "default": true
   },
   "enableSongRequest": {
@@ -52,7 +52,7 @@
       "standard"
     ],
     "labels": [
-      "auto 自动适配最高可用",
+      "auto 按账号权限自适配",
       "jymaster 超清母带",
       "sky 沉浸环绕声",
       "jyeffect 高清环绕声",
@@ -62,7 +62,7 @@
       "higher 较高",
       "standard 标准"
     ],
-    "hint": "auto 自动匹配歌曲最高可用音质并逐级降级；其余为指定最高档位。也可用指令 #ncm音质 <档位> 修改。"
+    "hint": "auto 按账号权限自适配：有会员/高档位特权时从超清母带起逐级降级，否则（匿名或非会员）从无损档起逐级降级，避免每次白打必然失败的高档位请求（会员状态缓存 10 分钟）。其余为指定最高档位。也可用指令 #ncm音质 <档位> 修改。"
   },
   "qualityUnblock": {
     "type": "bool",
@@ -79,11 +79,6 @@
     "description": "以群/好友文件方式发送音频",
     "default": true
   },
-  "tempDir": {
-    "type": "string",
-    "description": "音频临时下载目录（相对插件目录）",
-    "default": "temp/neteasemusic"
-  },
   "downloadTimeout": {
     "type": "int",
     "description": "音频下载超时（毫秒）",
@@ -91,7 +86,7 @@
   },
   "keepFileSec": {
     "type": "int",
-    "description": "临时文件保留秒数（0 表示立即删除）",
+    "description": "临时文件保留秒数（0 表示尽快删除；实际清理延迟不低于 5 秒）",
     "default": 60
   },
   "ffmpegCompress": {
@@ -131,7 +126,7 @@
   },
   "sendNativeCard": {
     "type": "bool",
-    "description": "发送 OneBot 原生音乐卡片（type=163，仅 aiocqhttp 等支持 send_api 的协议；QQ 官方机器人自动跳过）",
+    "description": "发送 OneBot 原生音乐卡片（type=163，仅 aiocqhttp 等能拿到 event.bot.call_action 的协议；QQ 官方机器人自动跳过）",
     "default": false
   },
   "sendTextInfo": {

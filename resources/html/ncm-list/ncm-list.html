@@ -457,18 +457,18 @@
           <div class="brand-mark">♪</div>
           <div class="hero-text">
             <div class="eyebrow">NCM SEARCH</div>
-            <div class="title">{{data.keyword || '点歌结果'}}</div>
+            <div class="title">{{ ('点歌结果' if not data.keyword else data.keyword) }}</div>
             <div class="subtitle">网易云音乐 · 发送 #ncm听序号 播放</div>
           </div>
-          <div class="version-pill">{{data.total || 0}} 首</div>
+          <div class="version-pill">{{ (0 if not data.total else data.total) }} 首</div>
         </div>
         <div class="hero-stats">
           <div class="stat">
-            <div class="stat-num">{{data.total || 0}}</div>
+            <div class="stat-num">{{ (0 if not data.total else data.total) }}</div>
             <div class="stat-label">命中</div>
           </div>
           <div class="stat">
-            <div class="stat-num">{{data.quality || 'AUTO'}}</div>
+            <div class="stat-num">{{ ('AUTO' if not data.quality else data.quality) }}</div>
             <div class="stat-label">最高音质</div>
           </div>
           <div class="stat">
@@ -483,27 +483,27 @@
           <div class="section-head">
             <div class="section-dot"></div>
             <div class="section-title">搜索结果</div>
-            <div class="section-tag">{{data.total || 0}} 首</div>
+            <div class="section-tag">{{ (0 if not data.total else data.total) }} 首</div>
           </div>
           <div class="song-list">
-            {{each data.songs song}}
+            {% for song in data.songs %}
             <div class="song">
-              <div class="song-idx">{{song.index}}</div>
-              {{if song.cover}}
-              <img class="song-cover" src="{{song.cover}}" referrerpolicy="no-referrer" />
-              {{else}}
+              <div class="song-idx">{{ song.index }}</div>
+              {% if song.cover %}
+              <img class="song-cover" src="{{ song.cover }}" referrerpolicy="no-referrer" />
+              {% else %}
               <div class="song-cover ph">♪</div>
-              {{/if}}
+              {% endif %}
               <div class="song-main">
-                <div class="song-name">{{song.songName}}</div>
-                <div class="song-singer">{{song.singerName}}{{song.albumName ? '  ·  ' + song.albumName : ''}}</div>
+                <div class="song-name">{{ song.songName }}</div>
+                <div class="song-singer">{{ song.singerName }}{{ (('  ·  ' ~ song.albumName) if song.albumName else '') }}</div>
               </div>
               <div class="song-right">
-                {{if song.duration}}<div class="song-duration">{{song.duration}}</div>{{else}}<div class="song-duration"></div>{{/if}}
-                <div class="song-tag {{song.payplay ? '' : 'free'}}">{{song.payplay ? '付费' : '免费'}}</div>
+                {% if song.duration %}<div class="song-duration">{{ song.duration }}</div>{% else %}<div class="song-duration"></div>{% endif %}
+                <div class="song-tag {{ ('' if song.payplay else 'free') }}">{{ ('付费' if song.payplay else '免费') }}</div>
               </div>
             </div>
-            {{/each}}
+            {% endfor %}
           </div>
         </div>
 
@@ -533,11 +533,11 @@
 
         <div class="tips">
           <div class="tips-title"><span>!</span>小提示</div>
-          <div class="tips-body">{{data.tip || '发送 #ncm听序号 播放（会话内也可 #听序号）；列表约 10 分钟内有效。'}}</div>
+          <div class="tips-body">{{ ('发送 #ncm听序号 播放（会话内也可 #听序号）；列表约 10 分钟内有效。' if not data.tip else data.tip) }}</div>
         </div>
 
         <div class="footer">
-          <div class="footer-left">{{data.apiHint || 'API 已对接'}}</div>
+          <div class="footer-left">{{ ('API 已对接' if not data.apiHint else data.apiHint) }}</div>
           <div class="footer-right">astrbot_plugin_neteasemusic</div>
         </div>
       </div>

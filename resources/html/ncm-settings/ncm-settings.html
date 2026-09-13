@@ -402,22 +402,22 @@
           <div class="brand-mark">⚙</div>
           <div class="hero-text">
             <div class="eyebrow">NCM SETTINGS</div>
-            <div class="title">{{data.title || '网易云音乐 · 插件设置'}}</div>
+            <div class="title">{{ ('网易云音乐 · 插件设置' if not data.title else data.title) }}</div>
             <div class="subtitle">配置即时生效，无需重启</div>
           </div>
-          <div class="version-pill">{{data.loginStatus ? '已配置' : '未登录'}}</div>
+          <div class="version-pill">{{ ('已配置' if data.loginStatus else '未登录') }}</div>
         </div>
         <div class="hero-stats">
           <div class="stat">
-            <div class="stat-num">{{data.quality || 'AUTO'}}</div>
+            <div class="stat-num">{{ ('AUTO' if not data.quality else data.quality) }}</div>
             <div class="stat-label">音质</div>
           </div>
           <div class="stat">
-            <div class="stat-num">{{data.maxList || 10}}</div>
+            <div class="stat-num">{{ (10 if not data.maxList else data.maxList) }}</div>
             <div class="stat-label">列表上限</div>
           </div>
           <div class="stat">
-            <div class="stat-num">{{data.apiHint || 'API 未配置'}}</div>
+            <div class="stat-num">{{ ('API 未配置' if not data.apiHint else data.apiHint) }}</div>
             <div class="stat-label">API</div>
           </div>
         </div>
@@ -428,15 +428,15 @@
           <div class="section-title">基础设置</div>
           <div class="meta-grid">
             <div class="meta">
-              <div class="meta-num">{{data.apiBase || '未配置'}}</div>
+              <div class="meta-num">{{ ('未配置' if not data.apiBase else data.apiBase) }}</div>
               <div class="meta-label">API 地址</div>
             </div>
             <div class="meta">
-              <div class="meta-num">{{data.cookieStatus || '-'}}</div>
+              <div class="meta-num">{{ ('-' if not data.cookieStatus else data.cookieStatus) }}</div>
               <div class="meta-label">默认 Cookie</div>
             </div>
             <div class="meta">
-              <div class="meta-num">{{data.loginStatus || '未登录'}}</div>
+              <div class="meta-num">{{ ('未登录' if not data.loginStatus else data.loginStatus) }}</div>
               <div class="meta-label">登录</div>
             </div>
           </div>
@@ -445,40 +445,40 @@
         <div class="section">
           <div class="section-title">功能开关</div>
           <div class="toggle-grid">
-            {{each data.toggles t}}
+            {% for t in data.toggles %}
             <div class="toggle">
-              <span class="toggle-name">{{t.name}}</span>
-              {{if t.on}}
+              <span class="toggle-name">{{ t.name }}</span>
+              {% if t.on %}
               <span class="pill on">开</span>
-              {{else}}
+              {% else %}
               <span class="pill off">关</span>
-              {{/if}}
+              {% endif %}
             </div>
-            {{/each}}
+            {% endfor %}
           </div>
         </div>
 
         <div class="section">
           <div class="quality-bar">
             <span class="quality-label">当前音质</span>
-            <span class="quality-value">{{data.quality || 'AUTO'}}</span>
+            <span class="quality-value">{{ ('AUTO' if not data.quality else data.quality) }}</span>
           </div>
         </div>
 
         <div class="tips">
           <div class="tips-title"><span>!</span>可修改</div>
           <div class="cmd-list">
-            {{each data.commands c}}
+            {% for c in data.commands %}
             <div class="cmd">
-              <span class="cmd-name">{{c.cmd}}</span>
-              <span class="cmd-desc">{{c.desc}}</span>
+              <span class="cmd-name">{{ c.cmd }}</span>
+              <span class="cmd-desc">{{ c.desc }}</span>
             </div>
-            {{/each}}
+            {% endfor %}
           </div>
         </div>
 
         <div class="footer">
-          <div class="footer-left">{{data.apiBase || 'API 已对接'}}</div>
+          <div class="footer-left">{{ ('API 已对接' if not data.apiBase else data.apiBase) }}</div>
           <div class="footer-right">astrbot_plugin_neteasemusic</div>
         </div>
       </div>

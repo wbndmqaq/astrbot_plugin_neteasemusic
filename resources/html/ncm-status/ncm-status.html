@@ -337,18 +337,18 @@
           <div class="brand-mark">♪</div>
           <div class="hero-text">
             <div class="eyebrow">NCM ACCOUNT</div>
-            <div class="title">{{data.title || '网易云音乐 · 登录状态'}}</div>
+            <div class="title">{{ ('网易云音乐 · 登录状态' if not data.title else data.title) }}</div>
             <div class="subtitle">网易云音乐账号状态</div>
           </div>
-          <div class="version-pill">{{data.badge}}</div>
+          <div class="version-pill">{{ data.badge }}</div>
         </div>
         <div class="hero-stats">
           <div class="stat">
-            <div class="stat-num">{{data.loggedIn ? '已登录' : '未登录'}}</div>
+            <div class="stat-num">{{ ('已登录' if data.loggedIn else '未登录') }}</div>
             <div class="stat-label">状态</div>
           </div>
           <div class="stat">
-            <div class="stat-num">{{data.quality || 'AUTO'}}</div>
+            <div class="stat-num">{{ ('AUTO' if not data.quality else data.quality) }}</div>
             <div class="stat-label">音质</div>
           </div>
           <div class="stat">
@@ -360,45 +360,45 @@
 
       <div class="body">
         <div class="user-card">
-          {{if data.avatar}}
-          <img class="avatar" src="{{data.avatar}}" referrerpolicy="no-referrer" />
-          {{else}}
-          <div class="avatar" style="display:flex;">{{data.avatarPh}}</div>
-          {{/if}}
+          {% if data.avatar %}
+          <img class="avatar" src="{{ data.avatar }}" referrerpolicy="no-referrer" />
+          {% else %}
+          <div class="avatar" style="display:flex;">{{ data.avatarPh }}</div>
+          {% endif %}
           <div class="user-main">
             <div class="user-name-row">
-              <div class="user-name">{{data.nickname || '未登录'}}</div>
-              {{if data.vipLabel}}
-              <div class="vip-badge {{data.vipGold ? 'black' : ''}}">{{data.vipLabel}}{{data.vipLevel ? ' Lv.' + data.vipLevel : ''}}</div>
-              {{/if}}
+              <div class="user-name">{{ ('未登录' if not data.nickname else data.nickname) }}</div>
+              {% if data.vipLabel %}
+              <div class="vip-badge {{ ('black' if data.vipGold else '') }}">{{ data.vipLabel }}{{ ((' Lv.' ~ data.vipLevel) if data.vipLevel else '') }}</div>
+              {% endif %}
             </div>
-            <div class="user-sub">{{data.uin ? 'UID ' + data.uin : '发送 #ncm登录 扫码登录'}}{{data.level ? ' · Lv.' + data.level : ''}}</div>
+            <div class="user-sub">{{ (('UID ' ~ data.uin) if data.uin else '发送 #ncm登录 扫码登录') }}{{ ((' · Lv.' ~ data.level) if data.level else '') }}</div>
           </div>
-          <div class="user-pill">{{data.loggedIn ? '在线' : '离线'}}</div>
+          <div class="user-pill">{{ ('在线' if data.loggedIn else '离线') }}</div>
         </div>
 
         <div class="meta-grid">
           <div class="meta">
-            <div class="meta-num">{{data.apiBase || '未配置'}}</div>
+            <div class="meta-num">{{ ('未配置' if not data.apiBase else data.apiBase) }}</div>
             <div class="meta-label">API</div>
           </div>
           <div class="meta">
-            <div class="meta-num">{{data.keyStatus || '-'}}</div>
+            <div class="meta-num">{{ ('-' if not data.keyStatus else data.keyStatus) }}</div>
             <div class="meta-label">Cookie</div>
           </div>
           <div class="meta">
-            <div class="meta-num">{{data.quality || 'AUTO'}}</div>
+            <div class="meta-num">{{ ('AUTO' if not data.quality else data.quality) }}</div>
             <div class="meta-label">音质</div>
           </div>
         </div>
 
         <div class="tips">
-          <div class="tips-title"><span>!</span>{{data.loggedIn ? '已登录' : '未登录'}}</div>
-          <div class="tips-body">{{data.tip || '发送 #ncm登录 扫码登录；#ncm音质 <档位> 修改音质'}}</div>
+          <div class="tips-title"><span>!</span>{{ ('已登录' if data.loggedIn else '未登录') }}</div>
+          <div class="tips-body">{{ ('发送 #ncm登录 扫码登录；#ncm音质 <档位> 修改音质' if not data.tip else data.tip) }}</div>
         </div>
 
         <div class="footer">
-          <div class="footer-left">{{data.apiBase || 'API 已对接'}}</div>
+          <div class="footer-left">{{ ('API 已对接' if not data.apiBase else data.apiBase) }}</div>
           <div class="footer-right">astrbot_plugin_neteasemusic</div>
         </div>
       </div>

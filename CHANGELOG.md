@@ -1,5 +1,41 @@
 # 更新日志
 
+## [v2.0.2] - 2026-09-12
+
+### 🐛 缺陷修复
+
+- **`#ncm红心` 永远无法取消**：`song_like_check` 的请求格式（需 JSON 数组）与响应解析（顶层 `ids`）双双错误，恒判「未红心」；`/like` 失败（HTTP 200 + `code≠200`）也谎报成功。两处均已修正。
+- **`#ncmMV` 可能播同名不同歌的 MV**：当前 API build 不返回 MV id，按歌名检索会混入同名结果——现要求歌名匹配，否则如实回「暂无 MV」；`#ncmMV榜` 被 `#ncmMV` 吞掉，补 priority。
+- **取链失败只报「无 XX 音质」**：现透出上游真实错误码（402 需 VIP / 404 无版权 / 403 风控）。
+- **`#ncm搜索建议` 恒空**：`/search/suggest` 无 `allMatch` 字段，改按歌手/专辑/歌名取值（去重保序）。
+- **发送失败被吞或穿透**：`send_chain` 只捕获 `AttributeError`，平台侧失败穿透 handler、卡片被拒不回退纯文本——现返回是否发出并保留「失败即降级」链。
+- **卸载时的临时文件治理**：立即补删会误删正在发送的文件（加 5 秒宽限），只取消不补删则永久残留；`terminate()` 取消后台任务后先 gather 再关会话/浏览器。
+- **`#ncm新碟`/`#ncm新碟榜` 提示误导**：`TIP_ALBUM_TRACKS` 重复定义且无会话场景不该提示「回复 #ncm听N」，拆为两个常量。
+- **配置写盘「假成功」**：旧版 AstrBot 无异步写盘 API 时 `await None` 被吞后仍回复成功，新版的提交返回值也未校验——统一走 `MusicService.save_config()` 并如实提示。
+- **会话 TTL 锚定首次写入**：`updatedAt` 被旧会话展开覆盖，600 秒后必失效且不续期；改让新时间戳胜出。
+- **`#ncm相关歌单` 不存在**：文档有、路由漏接线，补上。
+- **原生音乐卡片发不出去**：`event.platform` 上没有发送接口，改走 `event.bot.call_action` 直发 OneBot `music` 段。
+- **跨插件「最近活跃」标记失效**：`StarTools.get_data_dir()` 反查不到插件名必然抛错回退插件目录；显式传插件名。
+- **模板未开 autoescape 导致 HTML 注入**：卡片数据含用户可控文本；已开启（模板无样式插值，不受影响）。
+- **`#ncm排行` 冲掉点歌会话**：删除无用的会话写入。
+- **纯数字参数被当关键词**：`#ncm歌词/评论/相似/MV/红心 123` 改走 `song_detail`，未命中再回退搜索。
+- **`#ncm最近` 不是最近播放**：改为按播放时间取真正的最近 30 首。
+- **榜单名匹配空串恒真**：补非空守卫。
+- **`enable=false` 时 `#ncm帮助`/`#ncm热搜` 静默无响应**：两者只读，不再受总开关拦截。
+- **选歌类指令 API 报错时零回复**：`start_select` 异常穿透 handler；现捕获并回复原因。
+- **展示路径缺字段即崩**：榜单/歌手/专辑等 `item["key"]` 全部改 `.get()` 兜底。
+- **其他**：Jinja 渲染移入线程池；启动扫地单文件竞态；关键词搜索 `page_size` 下限；`request()` 非 GET 显式拒绝。
+
+### 🧩 其他改动
+
+- `core/api.py` 拆分为按域包 `core/api/`（拆分前后逐符号比对，零丢失）；帮助清单拆为纯数据模块 `core/help_data.py`，卡片与纯文本同源渲染。
+- 10 套卡片模板直接改写为标准 Jinja2（`tpl_adapter.py` 删除），按路径缓存已编译模板，读盘/编译/渲染均在线程池；`wrap_card_data()` 提供缺键安全。
+- 临时目录固定到 `data/plugin_data/astrbot_plugin_neteasemusic/temp`（`tempDir` 配置移除），启动时清理 1 小时前的崩溃残留。
+- `auto` 音质按账号权限自适应：有特权从母带起、否则从无损起；状态卡会员等级改读真实字段。
+- `MusicService` 按域瘦身（login/lists/panels/resolve 拆出、门面薄委托）；投递流程拆为有序私有步骤；重复代码收敛（`_reply_generic`/`_select`/`_collect`）。
+- 移除 40 余处历史导入脚手架与多处死代码；重复文案统一 `core/messages.py`；排行榜会话上限对齐 30 首；ffmpeg 探测缓存并启动预热；复用常驻 Chromium 与 HTTP 会话。
+- 文档：`enable` 描述、playwright 安装说明、README 配置表与目录树、别名清单、行数与模块名口径修正。
+
 ## [v2.0.1] - 2026-08-31
 
 ### 🐛 缺陷修复
@@ -140,7 +176,7 @@
 - 守卫逻辑抽成可单测的 `_should_block_qqofficial_file` / `_qq_official_chunked_upload_supported(version)`；修复拦截提示在语音未开启时误导（"改发语音"不成立）→ 改为如实提示"音频文件未发送"；清理 `_is_weixin_oc`/`send_native_music_card` 函数体多余空行
 - `deliver_song` 拆分出可单测的 `_deliver_local_audio`（语音/文件双通道投递 + wxoc 降级 + 文件守卫 + 文案兜底 + 清理调度），`deliver_song` 只负责文案/卡片/下载后委托
 - **修复文件名音质死参数**：`build_music_filename` 传了 `quality` 却漏 `include_quality=True`（代码注释声称"文件名已含歌手-歌名-音质"实际并不含）→ 补上，文件名现含音质档位（如 `周杰伦-晴天_exhigh.mp3`）
-- 新增 `tests/test_delivery_chunked.py`（31 用例，mock 无网络）：版本检测 + 守卫决策矩阵 + 本地音频投递端到端（双发/单发/文件拦截回退语音/全部失败文案兜底/微信降级/清理调度）
+- 新增离线单测覆盖（31 用例，mock 无网络，脚本位于仓库外的测试脚手架，不随插件发布）：版本检测 + 守卫决策矩阵 + 本地音频投递端到端（双发/单发/文件拦截回退语音/全部失败文案兜底/微信降级/清理调度）
 
 
 ## [v1.1.1] - 2026-08-10
@@ -162,7 +198,7 @@ v1.1.0 发布后的增量功能
 
 ### 🐛 修复
 
-- **模板转换器 bug（tpl_adapter）**：`'a' + x + 'b'` 这类首尾都是引号的拼接表达式被当作字符串字面量 → 改为整体字面量判定，新增回归测试
+- **模板转换器 bug（tpl_adapter）**：`'a' + x + 'b'` 这类首尾都是引号的拼接表达式被当作字符串字面量 → 改为整体字面量判定，新增转换用例（该转换器已在后续版本中移除，模板已直接改写为标准 Jinja2）
 - **`#ncm最近` 空结果**：`/record/recent/song` 的歌曲信息在 `item.data`（实测无 `resource` 字段）→ 解析改用 data 字段，并保留 playTime
 - **`#ncm历史日推` 空结果**：`/history/recommend/songs` 的 data 变为 dict（`dates` 日期列表 + `songs` 为 None，黑胶VIP 近 5 次特权）→ 自动取最近日期再调 `/history/recommend/songs/detail?date=` 拿歌曲
 - **`#ncmMV榜` 被 `#ncmMV` 抢正则**：`MV\s*(.+)$` 允许 0 空格 → `#ncmMV` 改为 `MV\s+(.+)`（关键词前至少一个空格），与 `#ncmMV榜` 精确区分

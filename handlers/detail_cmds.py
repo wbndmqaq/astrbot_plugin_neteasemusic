@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import random
 import re
 from typing import TYPE_CHECKING
 
@@ -9,63 +8,94 @@ from astrbot.api.event import AstrMessageEvent
 if TYPE_CHECKING:
     from ..core.service import MusicService
 
-try:
-    from ..core import api as ncmapi
-    from ..core import cards as cardlib
-    from ..core.api import ApiError
-except ImportError:
-    from core import api as ncmapi
-    from core import cards as cardlib
-    from core.api import ApiError
+from ..core import api as ncmapi
+from ..core import cards as cardlib
+from ..core.api import ApiError
+from ..core.lists import LIST_SHOW_LIMIT
+from ..core.messages import (
+    MSG_CLOUD_FAIL,
+    MSG_NEED_LOGIN,
+    MSG_PLAYLIST_FAIL,
+    msg_no_album,
+    msg_no_playlist,
+)
 from .base import Route
+
+
+async def _select(
+    service: MusicService,
+    event: AstrMessageEvent,
+    pattern: str,
+    action: str,
+    label: str,
+    verb: str,
+):
+    """「先选歌（回复 #ncm听N）再操作」的统一入口（6 条指令共用）。"""
+    m = service.check_cmd(event, pattern)
+    if not m:
+        return
+    await service.start_select(
+        event,
+        action,
+        m.group(1).strip(),
+        label=label,
+        verb=verb,
+        user_key=service.user_key(event),
+    )
+    event.stop_event()
+
+
+# ──────────── 条数常量 ────────────
+
+# 最近播放：接口一次最多取 300 条，展示最近 30 首
+RECENT_FETCH_LIMIT = 300
+RECENT_SHOW_LIMIT = 30
+# 云盘：取 30 条，展示前 LIST_SHOW_LIMIT 首
+CLOUD_FETCH_LIMIT = 30
+# 我喜欢的音乐 / 本周听歌排行
+LIBRARY_FETCH_LIMIT = 30
+
+
+async def _uid_or_reply(service: MusicService, event: AstrMessageEvent, user_key: str) -> str | None:
+    """取 uid；拿不到时已回复用户并返回 None（调用方 stop_event 后 return）。
+
+    区分「确实未登录」（→ MSG_NEED_LOGIN）与「API 不可用」（→ 真实原因），
+    后者若统一回「请先 #ncm登录」，会把服务挂掉误报成登录问题。
+    """
+    try:
+        uid = await service.get_uid(user_key)
+    except ApiError as err:
+        service.log_warn(f"获取账号信息失败: {err}")
+        await service.reply(event, f"获取账号信息失败：{err}")
+        return None
+    if not uid:
+        await service.reply(event, MSG_NEED_LOGIN)
+        return None
+    return uid
 
 
 async def get_lyric(service: MusicService, event: AstrMessageEvent):
     """#ncm歌词 [关键词]：先选歌（回复 #ncm听N）再显示歌词"""
-    m = service.check_cmd(event, r"^#?(?:ncm|NCM)\s*歌词\s*(.*)$")
-    if not m:
-        return
-    await service.start_select(
-        event,
-        "lyric",
-        m.group(1).strip(),
-        label="歌词",
-        verb="查看歌词",
-        user_key=service.user_key(event),
+    await _select(
+        service, event, r"^#?(?:ncm|NCM)\s*歌词\s*(.*)$",
+        "lyric", "歌词", "查看歌词",
     )
-    event.stop_event()
 
 
 async def lyric_word(service: MusicService, event: AstrMessageEvent):
     """#ncm逐字歌词 [关键词]：先选歌（回复 #ncm听N）再显示逐字歌词"""
-    m = service.check_cmd(event, r"^#?(?:ncm|NCM)\s*逐字歌词\s*(.*)$")
-    if not m:
-        return
-    await service.start_select(
-        event,
-        "lyric_word",
-        m.group(1).strip(),
-        label="逐字歌词",
-        verb="查看逐字歌词",
-        user_key=service.user_key(event),
+    await _select(
+        service, event, r"^#?(?:ncm|NCM)\s*逐字歌词\s*(.*)$",
+        "lyric_word", "逐字歌词", "查看逐字歌词",
     )
-    event.stop_event()
 
 
 async def get_comment(service: MusicService, event: AstrMessageEvent):
     """#ncm评论 [关键词]：先选歌（回复 #ncm听N）再显示热评"""
-    m = service.check_cmd(event, r"^#?(?:ncm|NCM)\s*评论\s*(.*)$")
-    if not m:
-        return
-    await service.start_select(
-        event,
-        "comment",
-        m.group(1).strip(),
-        label="评论",
-        verb="查看评论",
-        user_key=service.user_key(event),
+    await _select(
+        service, event, r"^#?(?:ncm|NCM)\s*评论\s*(.*)$",
+        "comment", "评论", "查看评论",
     )
-    event.stop_event()
 
 
 async def album_comment(service: MusicService, event: AstrMessageEvent):
@@ -79,10 +109,12 @@ async def album_comment(service: MusicService, event: AstrMessageEvent):
     try:
         album = await service.resolve_album(kw, user_key)
         if not album:
-            await service.reply(event, f"没有搜到专辑「{kw}」")
+            await service.reply(event, msg_no_album(kw))
             event.stop_event()
             return
-        comments = await ncmapi.comment_album(album["id"], limit=20, user_key=user_key)
+        comments = await ncmapi.comment_album(
+            album.get("id"), limit=20, user_key=user_key
+        )
         if not comments:
             await service.reply(event, "该专辑暂无评论")
             event.stop_event()
@@ -111,10 +143,12 @@ async def playlist_comment(service: MusicService, event: AstrMessageEvent):
     try:
         pl = await service.resolve_playlist(kw, user_key)
         if not pl:
-            await service.reply(event, f"没有搜到歌单「{kw}」")
+            await service.reply(event, msg_no_playlist(kw))
             event.stop_event()
             return
-        comments = await ncmapi.comment_playlist(pl["id"], limit=20, user_key=user_key)
+        comments = await ncmapi.comment_playlist(
+            pl.get("id"), limit=20, user_key=user_key
+        )
         if not comments:
             await service.reply(event, "该歌单暂无评论")
             event.stop_event()
@@ -134,18 +168,10 @@ async def playlist_comment(service: MusicService, event: AstrMessageEvent):
 
 async def simi(service: MusicService, event: AstrMessageEvent):
     """#ncm相似 [关键词]：先选歌（回复 #ncm听N）再显示相似歌曲"""
-    m = service.check_cmd(event, r"^#?(?:ncm|NCM)\s*相似\s*(.*)$")
-    if not m:
-        return
-    await service.start_select(
-        event,
-        "simi",
-        m.group(1).strip(),
-        label="相似",
-        verb="查看相似歌曲",
-        user_key=service.user_key(event),
+    await _select(
+        service, event, r"^#?(?:ncm|NCM)\s*相似\s*(.*)$",
+        "simi", "相似", "查看相似歌曲",
     )
-    event.stop_event()
 
 
 async def like_list(service: MusicService, event: AstrMessageEvent):
@@ -153,13 +179,12 @@ async def like_list(service: MusicService, event: AstrMessageEvent):
     if not service.cfg().get("enable", True):
         return
     user_key = service.user_key(event)
-    uid = await service.get_uid(user_key)
-    if not uid:
-        await service.reply(event, "需要登录后使用，请先 #ncm登录")
+    uid = await _uid_or_reply(service, event, user_key)
+    if uid is None:
         event.stop_event()
         return
     try:
-        songs = await ncmapi.likelist(uid, limit=30, user_key=user_key)
+        songs = await ncmapi.likelist(uid, limit=LIBRARY_FETCH_LIMIT, user_key=user_key)
         if not songs:
             await service.reply(event, "我喜欢的音乐为空")
             event.stop_event()
@@ -176,13 +201,14 @@ async def user_record(service: MusicService, event: AstrMessageEvent):
     if not service.cfg().get("enable", True):
         return
     user_key = service.user_key(event)
-    uid = await service.get_uid(user_key)
-    if not uid:
-        await service.reply(event, "需要登录后使用，请先 #ncm登录")
+    uid = await _uid_or_reply(service, event, user_key)
+    if uid is None:
         event.stop_event()
         return
     try:
-        songs = await ncmapi.user_record(uid, type_=1, limit=30, user_key=user_key)
+        songs = await ncmapi.user_record(
+            uid, type_=1, limit=LIBRARY_FETCH_LIMIT, user_key=user_key
+        )
         if not songs:
             await service.reply(event, "本周暂无听歌记录")
             event.stop_event()
@@ -233,18 +259,18 @@ async def user_cloud(service: MusicService, event: AstrMessageEvent):
         return
     user_key = service.user_key(event)
     try:
-        songs = await ncmapi.user_cloud(limit=30, user_key=user_key)
+        songs = await ncmapi.user_cloud(limit=CLOUD_FETCH_LIMIT, user_key=user_key)
         if not songs:
             await service.reply(event, "云盘暂无歌曲（或账号未开通云盘）")
             event.stop_event()
             return
-        await service.list_to_session(event, "我的云盘", songs[:20])
+        await service.list_to_session(event, "我的云盘", songs[:LIST_SHOW_LIMIT])
     except ApiError as err:
         service.log_warn(f"云盘失败: {err}")
-        await service.reply(event, f"获取云盘失败：{err}\n需要先 #ncm登录")
+        await service.reply(event, MSG_CLOUD_FAIL.format(err=err))
     except Exception as err:
         service.log_warn(f"云盘异常: {type(err).__name__}: {err}")
-        await service.reply(event, f"获取云盘失败：{err}\n需要先 #ncm登录")
+        await service.reply(event, MSG_CLOUD_FAIL.format(err=err))
     event.stop_event()
 
 
@@ -254,17 +280,18 @@ async def recent_song(service: MusicService, event: AstrMessageEvent):
         return
     user_key = service.user_key(event)
     if not service.has_cookie():
-        await service.reply(event, "需要登录后使用，请先 #ncm登录")
+        await service.reply(event, MSG_NEED_LOGIN)
         event.stop_event()
         return
     try:
-        songs = await ncmapi.record_recent_song(limit=300, user_key=user_key)
+        songs = await ncmapi.record_recent_song(limit=RECENT_FETCH_LIMIT, user_key=user_key)
         if not songs:
             await service.reply(event, "暂无最近播放记录")
             event.stop_event()
             return
-        shown = random.sample(songs, min(30, len(songs)))
-        shown.sort(key=lambda s: -(s.get("playTime") or 0))
+        # 按最近播放时间取真正的最近 N 首（此前是随机抽 30 首再排序，展示的并非"最近"）
+        songs.sort(key=lambda s: -(s.get("playTime") or 0))
+        shown = songs[:RECENT_SHOW_LIMIT]
         cleaned = []
         for s in shown:
             s2 = dict(s)
@@ -285,13 +312,12 @@ async def my_playlist(service: MusicService, event: AstrMessageEvent):
     if not service.cfg().get("enable", True):
         return
     user_key = service.user_key(event)
-    uid = await service.get_uid(user_key)
-    if not uid:
-        await service.reply(event, "需要登录后使用，请先 #ncm登录")
+    uid = await _uid_or_reply(service, event, user_key)
+    if uid is None:
         event.stop_event()
         return
     try:
-        pls = await ncmapi.user_playlist(uid, limit=30, user_key=user_key)
+        pls = await ncmapi.user_playlist(uid, limit=LIBRARY_FETCH_LIMIT, user_key=user_key)
         if not pls:
             await service.reply(event, "暂无歌单")
             event.stop_event()
@@ -301,46 +327,24 @@ async def my_playlist(service: MusicService, event: AstrMessageEvent):
         )
     except ApiError as err:
         service.log_warn(f"我的歌单失败: {err}")
-        await service.reply(event, f"获取歌单失败：{err}")
+        await service.reply(event, MSG_PLAYLIST_FAIL.format(err=err))
     event.stop_event()
 
 
 async def like_toggle(service: MusicService, event: AstrMessageEvent):
     """#ncm红心 [关键词]：先选歌（回复 #ncm听N）再红心/取消红心（需登录/主人）"""
-    if not service.cfg().get("enable", True):
-        return
-    m = re.match(r"^#?(?:ncm|NCM)\s*红心\s*(.*)$", event.message_str.strip(), re.IGNORECASE)
-    if not m:
-        return
-    await service.start_select(
-        event,
-        "like",
-        m.group(1).strip(),
-        label="红心",
-        verb="红心",
-        user_key=service.user_key(event),
+    await _select(
+        service, event, r"^#?(?:ncm|NCM)\s*红心\s*(.*)$",
+        "like", "红心", "红心",
     )
-    event.stop_event()
 
 
 async def unlike(service: MusicService, event: AstrMessageEvent):
     """#ncm取消红心 [关键词]：先选歌（回复 #ncm听N）再取消红心（需登录/主人）"""
-    if not service.cfg().get("enable", True):
-        return
-    m = re.match(
-        r"^#?(?:ncm|NCM)\s*取消红心\s*(.*)$", event.message_str.strip(), re.IGNORECASE
+    await _select(
+        service, event, r"^#?(?:ncm|NCM)\s*取消红心\s*(.*)$",
+        "unlike", "取消红心", "取消红心",
     )
-    if not m:
-        return
-    await service.start_select(
-        event,
-        "unlike",
-        m.group(1).strip(),
-        label="取消红心",
-        verb="取消红心",
-        user_key=service.user_key(event),
-    )
-    event.stop_event()
 
 
 async def history_daily(service: MusicService, event: AstrMessageEvent):
@@ -349,7 +353,7 @@ async def history_daily(service: MusicService, event: AstrMessageEvent):
         return
     user_key = service.user_key(event)
     if not service.has_cookie():
-        await service.reply(event, "需要登录后使用，请先 #ncm登录")
+        await service.reply(event, MSG_NEED_LOGIN)
         event.stop_event()
         return
     try:
@@ -358,7 +362,7 @@ async def history_daily(service: MusicService, event: AstrMessageEvent):
             await service.reply(event, "暂无历史推荐记录")
             event.stop_event()
             return
-        await service.list_to_session(event, "历史每日推荐", songs[:20])
+        await service.list_to_session(event, "历史每日推荐", songs[:LIST_SHOW_LIMIT])
     except ApiError as err:
         service.log_warn(f"历史日推失败: {err}")
         await service.reply(event, f"获取历史日推失败：{err}\n需要先 #ncm登录")

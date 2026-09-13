@@ -15,14 +15,14 @@
 ## ✨ 功能特性
 
 - **点歌播放**：关键词搜索 → 列表卡片 → `#ncm听N` 选歌，或 `#ncm播放` 直接播第一首
-- **音质自适配**：`auto` 自动匹配歌曲最高可用音质并逐级降级；VIP/灰歌自动解灰兜底
-- **音频投递**：语音（silk 转码）+ 群/好友文件双通道，互不阻塞，失败自动回退
+- **音质自适配**：`auto` 按账号权限自适应——检测到会员/高档位特权时从超清母带起逐级降级，否则从无损档起降级（避免匿名/非会员每首歌白打 4 次必然失败的高档位请求；会员状态缓存 10 分钟）；VIP/灰歌自动解灰兜底
+- **音频投递**：语音 + 群/好友文件双通道，互不阻塞，失败自动回退（silk 转码由协议端完成，插件不预编码）
 - **多平台适配**：QQ 官方（合并消息规避额度、大文件分片上传、ffmpeg 压缩兜底、纯文本兜底）、个人微信 weixin_oc（语音自动降级为文件）、Telegram / 钉钉 / 飞书 / KOOK / Discord 原生支持语音与文件
-- **卡片渲染**：7 套网易云红主题 HTML 卡片（列表/详情/歌词/热搜/评论/帮助/状态），自动裁剪白边
-- **链接自动解析**：发送 `music.163.com` / `163music.com` 分享卡片或链接，自动识别歌曲/歌单/专辑并播放
-- **扫码登录**：`#ncm登录` 生成二维码，轮询自动写入 Cookie，支持多账号（按会话隔离）
+- **卡片渲染**：10 套网易云红主题 HTML 卡片（列表/详情/歌词/热搜/评论/帮助/状态/通用条目/歌单/设置），自动裁剪白边
+- **链接自动解析**：发送 `music.163.com` / `163music.com` / `163cn.tv` 分享卡片或链接，自动识别歌曲/歌单/专辑并播放
+- **扫码登录**：`#ncm登录` 生成二维码，轮询自动写入 Cookie（全局单账号，重新扫码会覆盖默认 Cookie）
 - **高内聚模块化架构**：核心业务服务下沉（`core/`），声明式指令路由按领域拆分（`handlers/`），纯异步无阻塞调度
-- **临时文件自清理**：卡片图、二维码、音频文件发出后自动延时清除，`keepFileSec=0` 即时清除
+- **临时文件自清理**：卡片图、二维码、音频文件发出后自动延时清除，清理延迟下限 5 秒（避免发送端尚未读盘就被删除）
 
 ---
 
@@ -48,7 +48,9 @@ node app.js   # 默认监听 http://localhost:3000
 
 ### 卡片渲染环境安装教程（可选，不影响点歌播放）
 
-卡片渲染基于本地 Playwright 截图实现。出于安全考虑，插件**绝不会**自动执行任何系统级安装——不修改 apt 源、不运行 apt-get、不自动 pip 装包、不自动下载浏览器内核。需要图片卡片时请按下面步骤手动安装（约 1~2 分钟）：
+卡片渲染基于本地 Playwright 截图实现。出于安全考虑，插件**绝不会**自动执行任何系统级安装——不修改 apt 源、不运行 apt-get、不在运行时 pip 装包、不下载浏览器内核。需要图片卡片时请按下面步骤手动安装（约 1~2 分钟）：
+
+> **`playwright` 会不会被自动安装？** 会——AstrBot 在安装/启用插件时会 `pip install -r requirements.txt`，把本插件声明的依赖（含 `playwright`）装进宿主环境，这一步无需你手动做（可用 `pip show playwright` 确认）。但 pip **不会**下载 Chromium 内核，内核必须按第 ② 步手动安装。若 pip 安装失败（宿主机离线等）也不影响插件加载：`import playwright` 失败时卡片自动回退纯文本，点歌播放不受影响。
 
 #### ① 安装 playwright Python 包
 
@@ -122,18 +124,16 @@ WebUI → 插件管理 → 本插件 → 设置面板。也可用指令热改部
 | 配置项 | 类型 | 默认 | 说明 |
 | --- | --- | --- | --- |
 | `apiBase` | string | `""` | api-enhanced 服务地址，如 `http://127.0.0.1:3000` |
-| `enable` | bool | `true` | 插件总开关 |
+| `enable` | bool | `true` | 插件功能总开关：关闭后点歌、播放、歌词、榜单、解析、登录/状态等指令不再响应（静默）；`#ncm帮助`、`#ncm热搜` 等只读指令与 `#ncm设置`/`#ncm音质`/`#ncm api`/`#ncm 开启|关闭点歌`/`#ncm 开启|关闭解析`/`#ncm测试`/`#ncm登出` 等配置类指令保留，便于自助排查与恢复。 |
 | `enableSongRequest` | bool | `true` | 点歌功能开关 |
-| `enableResolve` | bool | `true` | 网易云链接自动解析开关 |
-| `resolveLinks` | bool | `true` | 识别 `music.163.com` / `163music.com` 链接 |
+| `enableResolve` | bool | `true` | 网易云链接/分享卡片自动解析开关（含 `163cn.tv` 短链展开） |
 | `maxList` | int | `10` | 点歌列表最大显示条数（1–20） |
-| `quality` | string | `auto` | 最高播放音质，可选 `auto/jymaster/sky/jyeffect/hires/lossless/exhigh/higher/standard` |
+| `quality` | string | `auto` | 最高播放音质，可选 `auto/jymaster/sky/jyeffect/hires/lossless/exhigh/higher/standard`；`auto` 按账号权限自适应（会员走全阶梯，否则从无损档起） |
 | `qualityUnblock` | bool | `true` | VIP/灰歌自动解灰兜底（`unblock=true`，音质可能降为源站可用） |
 | `sendVocal` | bool | `true` | 以语音消息方式发送音频 |
 | `uploadFile` | bool | `true` | 以群/好友文件方式发送音频 |
-| `tempDir` | string | `temp/neteasemusic` | 临时下载目录（相对插件目录） |
 | `downloadTimeout` | int | `90000` | 音频下载超时（毫秒） |
-| `keepFileSec` | int | `60` | 临时文件保留秒数（`0` 表示发出后立即删除，作用于音频+卡片图） |
+| `keepFileSec` | int | `60` | 临时文件保留秒数（作用于音频+卡片图；实际清理延迟不低于 5 秒） |
 | `ffmpegCompress` | bool | `true` | 大文件/FLAC 无法作为文件发送时（QQ 官方无分片上传/发送失败），用 ffmpeg 压成紧凑 mp3 兜底发送 |
 | `compressBitrate` | int | `128` | 压缩兜底 mp3 码率（kbps） |
 | `identifyPrefix` | string | `识别：` | 识别提示前缀 |
@@ -152,12 +152,15 @@ WebUI → 插件管理 → 本插件 → 设置面板。也可用指令热改部
 
 所有指令以 `#ncm` 为前缀（`#` 可省略，大小写不敏感）。会话内选歌也可用简写 `#听N`。
 
+别名：`#ncm菜单`=`#ncm帮助`；`#ncm配置` / `#网易云设置`=`#ncm设置`；`#ncm随机` / `#ncm放一首` / `#ncm来一首`=`#ncm来首歌`；`#ncm每日推荐`=`#ncm日推`；`#ncm扫码登录` / `#网易云登录`=`#ncm登录`；`#ncm登录状态`=`#ncm状态`；`#ncm注销` / `#ncm解绑`=`#ncm登出`；`#网易云测试`=`#ncm测试`。
+
 ### 🎤 点歌播放
 
 | 指令 | 说明 | 示例 |
 | --- | --- | --- |
 | `#ncm点歌 关键词` | 搜索并列出歌曲 | `#ncm点歌 晴天` |
 | `#ncm听N` / `#听N` | 播放列表第 N 首 | `#ncm听1` |
+| `#ncm听所有` | 连播当前列表（最多 30 首） | `#ncm听所有` |
 | `#ncm播放 关键词` | 搜索并直接播放第一首 | `#ncm播放 晴天` |
 | `#ncm来首歌` | 随机来一首（个人 FM，未登录退推荐新歌） | `#ncm来首歌` |
 | `#ncm歌词 关键词\|id` | 获取歌词 | `#ncm歌词 晴天` |
@@ -174,7 +177,7 @@ WebUI → 插件管理 → 本插件 → 设置面板。也可用指令热改部
 | `#ncm歌单 关键词` | 歌单曲目 | `#ncm歌单 华语` |
 | `#ncm评论 关键词` | 歌曲热评 | `#ncm评论 晴天` |
 | `#ncm相似 关键词\|id` | 相似歌曲 | `#ncm相似 晴天` |
-| `#ncm相似歌单 关键词\|id` | 相似歌单 | `#ncm相似歌单 晴天` |
+| `#ncm相似歌单 关键词\|歌曲id` | 相似歌单（`id` 是**歌曲** id，与 `#ncm相关歌单` 的歌单 id 不同） | `#ncm相似歌单 晴天` |
 | `#ncm相关歌单 歌单名\|id` | 相关歌单推荐 | `#ncm相关歌单 华语` |
 | `#ncm新歌 [地区]` | 新歌速递（华语/欧美/日本/韩国） | `#ncm新歌 华语` |
 | `#ncm精品歌单 [分类]` | 精品歌单 | `#ncm精品歌单 华语` |
@@ -224,9 +227,14 @@ WebUI → 插件管理 → 本插件 → 设置面板。也可用指令热改部
 | `#ncm设置` | 设置面板（登录态/音质/开关/脱敏 API） | `#ncm设置` |
 | `#ncm音质 <档位>` | 修改音质 | `#ncm音质 lossless` |
 | `#ncm api <地址>` | 修改 API 地址 | `#ncm api http://127.0.0.1:3000` |
-| `#ncm 开启/关闭 点歌\|解析` | 功能开关 | `#ncm 关闭 解析` |
+| `#ncm 开启点歌` / `#ncm 关闭解析` | 功能开关（点歌/解析，注意「开启/关闭」与目标之间**不能加空格**） | `#ncm 关闭解析` |
 | `#ncm测试` | 测试 API 连通性 | `#ncm测试` |
-| `#ncm帮助` | 帮助卡片 | `#ncm帮助` |
+
+### ❓ 帮助（全员可用）
+
+| 指令 | 说明 | 示例 |
+| --- | --- | --- |
+| `#ncm帮助` / `#ncm菜单` | 帮助卡片（指令一览，含真实指令数与当前音质） | `#ncm帮助` |
 
 ### 🔗 自动解析
 
@@ -242,7 +250,7 @@ WebUI → 插件管理 → 本插件 → 设置面板。也可用指令热改部
 
 插件按 `sendVocal`（语音）和 `uploadFile`（文件）配置双通道投递，两者互不阻塞：
 
-1. **语音**：本地音频经 silk 转码以语音消息发送
+1. **语音**：默认直接把音频作为语音段投递，silk 转码由协议端完成（插件不预编码 silk）
 2. **文件**：以原始音质文件（mp3/flac 等）作为群/好友文件发送
 
 ### QQ 官方机器人适配（`qqofficialAdapt`）
@@ -252,14 +260,14 @@ QQ 官方机器人接口与 OneBot 差异较大，插件做了专项适配：
 - **合并消息**：文案与首个媒体合并发送，规避被动回复额度限制
 - **大文件分片上传**：AstrBot ≥ 4.27.3 的 QQ 官方适配器对本地 >10MB 文件自动走分片上传，无损 FLAC 也可作为文件发送（`qqofficialChunkedUpload` 开关，默认开）。旧版 AstrBot 或关闭该开关时保留守卫：按大小（>10MB）或后缀（`.flac`）拦截文件上传——此时开启 `ffmpegCompress`（默认开）会用 ffmpeg 压成紧凑 mp3 发送；ffmpeg 缺失/压缩失败才退回仅发语音（silk）
 - **纯文本兜底**：媒体发送失败时，文本走 `msg_type=0` 纯文本，规避 `40034011 无效 markdown` 报错
-- **原生卡片跳过**：QQ 官方无 OneBot `send_api`，原生音乐卡片自动跳过
+- **原生卡片跳过**：QQ 官方不是 OneBot 通道（无 `call_action`），原生音乐卡片自动跳过
 
 ### 个人微信（`weixin_oc`）适配
 
 微信开放平台 ilink 通道（手机扫码登录个人微信）。weixin_oc 适配器出站**不支持语音（Record）**，`sendBySession` 只接收 Plain/Image/Video/File：
 
 - **语音自动降级**：`sendVocal` 开启时，语音自动改为文件发送（无需改配置，图片卡片/二维码/文件均正常）
-- **原生卡片跳过**：weixin_oc 无 OneBot `send_api`，原生音乐卡片自动跳过
+- **原生卡片跳过**：weixin_oc 不是 OneBot 通道（无 `call_action`），原生音乐卡片自动跳过
 
 ### Telegram / 钉钉 / 飞书 / KOOK / Discord
 
@@ -270,11 +278,13 @@ QQ 官方机器人接口与 OneBot 差异较大，插件做了专项适配：
 - **飞书**：`convert_audio_to_opus` 转 opus 发送
 - **KOOK**：上传资源后以 AUDIO 卡片发送
 - **Discord**：语音转 wav 作为附件发送
-- 五个平台均无 OneBot `send_api`，原生音乐卡片自动跳过
+- 五个平台均不是 OneBot 通道（无 `call_action`），原生音乐卡片自动跳过
 
 ### aiocqhttp（OneBot）增强
 
-- 可选 `sendNativeCard`：发送 OneBot 原生音乐卡片（type=163），需协议端支持 `send_api`
+- 可选 `sendNativeCard`：通过 `event.bot.call_action` 直发 OneBot v11 `music` 段（type=163），需协议端支持该 action
+- 语音/文件走 base64 内联直发（`record` / `file` 段），不依赖 AstrBot 与协议端共享文件系统；无损/大文件（>8MB 或 flac/wav/ogg/m4a）先由 ffmpeg 压成紧凑 mp3 控制载荷
+- 音乐卡片、语音、文件发送失败均自动降级（回退 `Record`/`File` 组件或纯文本），不中断点歌流程
 
 ---
 
@@ -282,7 +292,7 @@ QQ 官方机器人接口与 OneBot 差异较大，插件做了专项适配：
 
 ```text
 astrbot_plugin_neteasemusic/
-├── main.py                  # 插件生命周期入口与路由绑定（~50行）
+├── main.py                  # 插件生命周期入口与路由绑定
 ├── __init__.py              # 顶层包入口
 ├── metadata.yaml            # 插件元信息
 ├── _conf_schema.json        # 配置项 Schema
@@ -290,14 +300,19 @@ astrbot_plugin_neteasemusic/
 ├── CHANGELOG.md             # 更新日志
 ├── requirements.txt         # Python 依赖
 ├── core/                    # 核心业务服务层
-│   ├── __init__.py          # 导出 MusicService
-│   ├── service.py           # 核心服务调度器（取链、卡片渲染、选歌会话调度、登录轮询生命周期）
-│   ├── api.py               # api-enhanced 客户端封装
-│   ├── cards.py             # 会话与卡片数据构造
-│   ├── delivery.py          # 音频下载与多平台分发
+│   ├── __init__.py          # 包说明（不在包级再导出，避免导入即拉整条依赖链）
+│   ├── service.py           # MusicService 服务门面（会话归属、配置写盘、卡片渲染、歌词解析、生命周期）
+│   ├── api/                 # api-enhanced 客户端包（_core HTTP 会话与错误映射 + 按域端点模块）
+│   ├── cards.py             # 会话存储与卡片数据构造
+│   ├── delivery.py          # 音频下载与多平台双通道投递
+│   ├── login.py             # 扫码登录与二维码状态轮询
+│   ├── lists.py             # 会话列表 → 选歌 / #ncm听N 展开流程
+│   ├── panels.py            # 登录状态卡片数据构造与发送
+│   ├── resolve.py           # 分享链接/卡片自动解析
+│   ├── messages.py          # 跨模块复用的用户可见文案常量
 │   ├── quality.py           # 音质常量与标签映射
+│   ├── help_data.py         # 帮助指令清单（纯数据表，卡片与纯文本共用）
 │   ├── render.py            # Playwright HTML 渲染引擎
-│   └── tpl_adapter.py       # 模板适配器
 ├── handlers/                # 声明式指令路由层（按领域解耦）
 │   ├── __init__.py          # 聚合导出 ALL_ROUTES
 │   ├── base.py              # 声明式 Route 基类与 AstrBot 精准匹配安装器
@@ -315,7 +330,7 @@ astrbot_plugin_neteasemusic/
 ## ❓ 常见问题
 
 **Q：提示「未登录」或个人化接口失败？**
-A：部分接口（日推、喜欢、云盘、听歌排行等）需登录。发送 `#ncm登录` 扫码登录，或手动在配置 `defaultCookie` 填入 `MUSIC_U=...` Cookie。多账号按会话隔离，各自扫码互不干扰。
+A：部分接口（日推、喜欢、云盘、听歌排行等）需登录。发送 `#ncm登录` 扫码登录，或手动在配置 `defaultCookie` 填入 `MUSIC_U=...` Cookie。注意：Cookie 为**全局共享单账号**，任何一次扫码登录都会覆盖 `defaultCookie`、任何一次管理员 `#ncm登出` 也会清空它（不支持按会话隔离多账号）。
 
 **Q：VIP 歌曲播放失败/只有试听？**
 A：确认 `qualityUnblock`（默认开）启用，且 API 服务端 `ENABLE_GENERAL_UNBLOCK=true`（默认开）。解灰可能将音质降为源站可用音质。
@@ -324,10 +339,10 @@ A：确认 `qualityUnblock`（默认开）启用，且 API 服务端 `ENABLE_GEN
 A：AstrBot ≥ 4.27.3 起 QQ 官方适配器支持大文件分片上传（`qqofficialChunkedUpload` 默认开），FLAC/>10MB 也可正常发送。若分片不可用或仍发送失败，开启 `ffmpegCompress`（默认开）会用 ffmpeg 压成紧凑 mp3 兜底——请确认本机已安装 ffmpeg。
 
 **Q：自动解析不生效？**
-A：确认 `enableResolve` 与 `resolveLinks` 均开启，且消息中含完整 `music.163.com` / `163music.com` 链接。插件指令消息不会被误解析。
+A：确认 `enableResolve`（默认开）已开启，且消息中含 `music.163.com` / `163music.com` / `163cn.tv` 链接或分享卡片。插件指令消息不会被误解析。
 
 **Q：临时文件堆积？**
-A：默认 60 秒自动清理。如仍堆积，检查 `keepFileSec` 是否被设为过大值；设为 `0` 即时清理。
+A：默认 60 秒自动清理。如仍堆积，检查 `keepFileSec` 是否被设为过大值；设为 `0` 会尽快清理（延迟下限 5 秒）。
 
 ---
 ## 📮 用户群

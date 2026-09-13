@@ -9,18 +9,11 @@ from astrbot.api.event import AstrMessageEvent
 if TYPE_CHECKING:
     from ..core.service import MusicService
 
-try:
-    from ..core import api as ncmapi
-    from ..core import cards as cardlib
-    from ..core.api import ApiError
-    from ..core.delivery import deliver_song
-    from ..core.service import PLAY_ALL_LIMIT, PLUGIN_DIR
-except ImportError:
-    from core import api as ncmapi
-    from core import cards as cardlib
-    from core.api import ApiError
-    from core.delivery import deliver_song
-    from core.service import PLAY_ALL_LIMIT, PLUGIN_DIR
+from ..core import api as ncmapi
+from ..core import cards as cardlib
+from ..core.api import ApiError
+from ..core.delivery import deliver_song
+from ..core.service import PLAY_ALL_LIMIT
 from .base import Route
 
 
@@ -38,7 +31,7 @@ async def pick_song(service: MusicService, event: AstrMessageEvent):
         return
     try:
         await service.reply(event, f"正在搜索：{keyword}")
-        page_size = min(int(cfg.get("maxList") or 10), 20)
+        page_size = max(1, min(ncmapi.as_int(cfg.get("maxList") or 10, 10), 20))
         lst = await ncmapi.search(
             keyword, type_=1, limit=page_size, user_key=service.user_key(event)
         )
@@ -70,6 +63,11 @@ async def choose_song(service: MusicService, event: AstrMessageEvent):
     scope = service.scope(event)
     session = await cardlib.SessionStore.get(service.plugin, scope)
     if not session or not session.get("data"):
+        # 裸 #听N（无 ncm 前缀）保持静默（跨插件抢占）；显式 #ncm听N 必须回一句，
+        # 否则会话过期（TTL 600s）后用户完全收不到响应
+        if m and m.group(1):
+            await service.reply(event, "列表已过期，请重新 #ncm点歌")
+            event.stop_event()
         return
     stype = session.get("type")
     if stype == "albumList":
@@ -127,14 +125,23 @@ async def play_all(service: MusicService, event: AstrMessageEvent):
         r"^#?(?:ncm|NCM)\s*听\s*所有$|^#\s*听\s*所有$",
         event.message_str.strip(),
         re.IGNORECASE,
-    ) or not is_plugin_session_active(service, event):
+    ):
         return
-    # 裸 #听所有（无 ncm 前缀）仅由最近活跃的音乐插件响应
-    if not re.match(r"^#?(?:ncm|NCM)", event.message_str.strip(), re.IGNORECASE) and not await service.is_session_owner():
+    # 裸 #听所有（无 ncm 前缀）仅由最近活跃的音乐插件响应；显式 #ncm听所有 在会话
+    # 过期时必须回一句，否则用户完全收不到响应
+    has_prefix = bool(
+        re.match(r"^#?(?:ncm|NCM)", event.message_str.strip(), re.IGNORECASE)
+    )
+    if not has_prefix and not await service.is_session_owner():
         return
     scope = service.scope(event)
     session = await cardlib.SessionStore.get(service.plugin, scope)
-    if not session or session.get("type") != "songs" or not session.get("data"):
+    if not session or not session.get("data"):
+        if has_prefix:
+            await service.reply(event, "列表已过期，请重新 #ncm点歌")
+            event.stop_event()
+        return
+    if session.get("type") != "songs":
         return
     songs = session.get("data") or []
     batch = songs[:PLAY_ALL_LIMIT]
@@ -158,16 +165,22 @@ async def play_all(service: MusicService, event: AstrMessageEvent):
                 fail += 1
                 service.log_warn(f"连播 {i + 1}/{len(batch)} 无播放链: {song.get('name')}")
                 continue
-            await deliver_song(
+            res = await deliver_song(
                 service.plugin,
                 event,
                 song,
                 play,
                 cfg=cfg,
-                plugin_dir=PLUGIN_DIR,
                 options={"skipTextInfo": True, "skipNativeCard": True},
             )
-            ok += 1
+            if res.get("ok"):
+                ok += 1
+            else:
+                fail += 1
+                service.log_warn(
+                    f"连播 {i + 1}/{len(batch)} 投递失败: {song.get('name')}"
+                    f"（{res.get('reason') or '投递未成功'}）"
+                )
         except ApiError as err:
             fail += 1
             service.log_warn(f"连播 {i + 1}/{len(batch)} 失败: {err}")
@@ -180,10 +193,6 @@ async def play_all(service: MusicService, event: AstrMessageEvent):
             await asyncio.sleep(1)
     await service.reply(event, f"连播完成：成功 {ok} 首，失败 {fail} 首")
     event.stop_event()
-
-
-def is_plugin_session_active(service: MusicService, event: AstrMessageEvent) -> bool:
-    return True
 
 
 async def play_direct(service: MusicService, event: AstrMessageEvent):

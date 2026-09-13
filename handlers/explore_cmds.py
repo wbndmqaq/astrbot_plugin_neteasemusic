@@ -9,17 +9,51 @@ from astrbot.api.event import AstrMessageEvent
 if TYPE_CHECKING:
     from ..core.service import MusicService
 
-try:
-    from ..core import api as ncmapi
-    from ..core import cards as cardlib
-    from ..core.api import ApiError
-    from ..core.service import NEW_SONG_AREAS
-except ImportError:
-    from core import api as ncmapi
-    from core import cards as cardlib
-    from core.api import ApiError
-    from core.service import NEW_SONG_AREAS
+from ..core import api as ncmapi
+from ..core import cards as cardlib
+from ..core.api import ApiError
+from ..core.lists import LIST_PREVIEW_LIMIT, LIST_SHOW_LIMIT
+from ..core.messages import (
+    MSG_PLAYLIST_FAIL,
+    TIP_ALBUM_SEARCH,
+    TIP_ARTIST_SONGS,
+    TIP_PLAYLIST_TRACKS,
+    fmt_album_show_tip,
+    fmt_album_tracks_tip,
+    fmt_playlist_show_tip,
+    fmt_playlist_title,
+    msg_no_album,
+    msg_no_playlist,
+)
+from ..core.service import NEW_SONG_AREAS
 from .base import Route
+
+
+async def _reply_generic(
+    service: MusicService,
+    event: AstrMessageEvent,
+    title: str,
+    items: list,
+    *,
+    subtitle: str = "",
+    tip: str = "",
+    text_tip: str = "",
+) -> bool:
+    """通用列表卡片 + 文本兜底（原先 11 处逐字重复的两段式构造收敛到这一处）。
+
+    ``text_tip`` 仅在「卡片 tip 与文本 tip 不同」时传入（如 #ncmbanner）。
+    """
+    data = cardlib.build_generic_card_data(
+        title, items, subtitle=subtitle, tip=tip, cfg=service.cfg()
+    )
+    return await service.reply_card_or_text(
+        event,
+        tpl_name="ncm-generic",
+        data=data,
+        format_text=lambda d: cardlib.format_generic_text(
+            title, items, tip=text_tip or tip
+        ),
+    )
 
 
 async def chart(service: MusicService, event: AstrMessageEvent):
@@ -36,46 +70,51 @@ async def chart(service: MusicService, event: AstrMessageEvent):
             event.stop_event()
             return
         if not name:
-            scope = service.scope(event)
-            await cardlib.SessionStore.set(service.plugin, scope, {"type": "topCategory", "data": tops})
-            items = [{"name": t["name"], "sub": t.get("updateFrequency") or "未知更新频率"} for t in tops]
-            data = cardlib.build_generic_card_data(
-                "网易云排行榜",
+            # 榜单列表无需存会话（读取分支不存在，写入还会覆盖用户正在用的歌曲会话）
+            title = "网易云排行榜"
+            tip = "发送 #ncm排行 榜单名 查看（如 #ncm排行 飙升榜）"
+            items = [
+                {
+                    "name": t.get("name") or "",
+                    "sub": t.get("updateFrequency") or "未知更新频率",
+                }
+                for t in tops
+            ]
+            await _reply_generic(
+                service,
+                event,
+                title,
                 items,
                 subtitle=f"共 {len(tops)} 个榜单",
-                tip="发送 #ncm排行 榜单名 查看（如 #ncm排行 飙升榜）",
-                cfg=service.cfg(),
-            )
-            await service.reply_card_or_text(
-                event,
-                tpl_name="ncm-generic",
-                data=data,
-                format_text=lambda d: cardlib.format_generic_text(
-                    "网易云排行榜", items, tip="发送 #ncm排行 榜单名 查看（如 #ncm排行 飙升榜）"
-                ),
+                tip=tip,
             )
             event.stop_event()
             return
         target = None
         for t in tops:
-            if name == str(t["id"]):
+            if name == str(t.get("id")):
                 target = t
                 break
         if not target:
             for t in tops:
-                if name in t["name"] or t["name"] in name:
+                t_name = t.get("name") or ""
+                if t_name and (t_name in name or name in t_name):
                     target = t
                     break
         if not target:
             await service.reply(event, f"未找到榜单「{name}」，发送 #ncm排行 查看全部榜单")
             event.stop_event()
             return
-        songs = await ncmapi.top_detail(target["id"], limit=60, user_key=user_key)
+        # 与全插件口径一致：会话只存 LIST_PREVIEW_LIMIT 首（原先取 60 首，
+        # 会话/卡片/连播都按 60 走，超出其它列表页 30 首的约定）。
+        songs = await ncmapi.top_detail(
+            target.get("id"), limit=LIST_PREVIEW_LIMIT, user_key=user_key
+        )
         if not songs:
-            await service.reply(event, f"榜单「{target['name']}」暂无数据")
+            await service.reply(event, f"榜单「{target.get('name')}」暂无数据")
             event.stop_event()
             return
-        await service.list_to_session(event, f"排行榜 · {target['name']}", songs)
+        await service.list_to_session(event, f"排行榜 · {target.get('name')}", songs)
     except ApiError as err:
         service.log_warn(f"排行失败: {err}")
         await service.reply(event, f"获取排行榜失败：{err}")
@@ -97,13 +136,16 @@ async def artist(service: MusicService, event: AstrMessageEvent):
             event.stop_event()
             return
         a = artists[0]
-        songs = await ncmapi.artist_top_songs(a["id"], limit=30, user_key=user_key)
+        songs = await ncmapi.artist_top_songs(a.get("id"), limit=30, user_key=user_key)
         if not songs:
-            await service.reply(event, f"歌手「{a['name']}」暂无热门歌曲")
+            await service.reply(event, f"歌手「{a.get('name')}」暂无热门歌曲")
             event.stop_event()
             return
         await service.list_to_session(
-            event, f"歌手 · {a['name']}", songs, tip=f"歌手：{a['name']} 的热门歌曲（共 {len(songs)} 首）"
+            event,
+            f"歌手 · {a.get('name')}",
+            songs,
+            tip=f"歌手：{a.get('name')} 的热门歌曲（共 {len(songs)} 首）",
         )
     except ApiError as err:
         service.log_warn(f"歌手失败: {err}")
@@ -122,19 +164,31 @@ async def album(service: MusicService, event: AstrMessageEvent):
     try:
         albums = await ncmapi.search_albums(kw, limit=8, user_key=user_key)
         if not albums:
-            await service.reply(event, f"没有搜到专辑「{kw}」")
+            await service.reply(event, msg_no_album(kw))
             event.stop_event()
             return
         if len(albums) == 1:
             a = albums[0]
-            album_info, songs = await ncmapi.album_detail(a["id"], user_key=user_key)
+            album_info, songs = await ncmapi.album_detail(
+                a.get("id"), user_key=user_key
+            )
             info = album_info or {}
             if songs:
+                # 与歌单展开/会话展开同一口径：只展示前 LIST_PREVIEW_LIMIT 首，
+                # 否则上百首的专辑会渲染出极高的卡片
+                shown = songs[:LIST_PREVIEW_LIMIT]
+                tip = (
+                    fmt_album_show_tip(
+                        info.get("artist") or "", len(songs), len(shown)
+                    )
+                    if len(shown) < len(songs)
+                    else fmt_album_tracks_tip(info.get("artist") or "", len(songs))
+                )
                 await service.list_to_session(
                     event,
-                    f"专辑 · {info.get('name') or a['name']}",
-                    songs,
-                    tip=f"歌手：{info.get('artist') or ''} · 共 {len(songs)} 首；回复 #ncm听N 播放，#ncm听所有 连播整张专辑",
+                    f"专辑 · {info.get('name') or a.get('name')}",
+                    shown,
+                    tip=tip,
                 )
                 event.stop_event()
                 return
@@ -157,19 +211,19 @@ async def playlist(service: MusicService, event: AstrMessageEvent):
     try:
         pls = await ncmapi.search_playlists(kw, limit=10, user_key=user_key)
         if not pls:
-            await service.reply(event, f"没有搜到歌单「{kw}」")
+            await service.reply(event, msg_no_playlist(kw))
             event.stop_event()
             return
         if len(pls) == 1:
             p = pls[0]
-            songs = await ncmapi.playlist_tracks(p["id"], user_key=user_key)
+            songs = await ncmapi.playlist_tracks(p.get("id"), user_key=user_key)
             if songs:
-                shown = songs[:30]
+                shown = songs[:LIST_PREVIEW_LIMIT]
                 await service.list_to_session(
                     event,
-                    f"歌单 · {p['name']}",
+                    fmt_playlist_title(p.get("name")),
                     shown,
-                    tip=f"歌单共 {len(songs)} 首，显示前 {len(shown)} 首；回复 #ncm听N 播放，#ncm听所有 连播",
+                    tip=fmt_playlist_show_tip(len(songs), len(shown)),
                 )
                 event.stop_event()
                 return
@@ -178,7 +232,7 @@ async def playlist(service: MusicService, event: AstrMessageEvent):
         )
     except ApiError as err:
         service.log_warn(f"歌单失败: {err}")
-        await service.reply(event, f"获取歌单失败：{err}")
+        await service.reply(event, MSG_PLAYLIST_FAIL.format(err=err))
     event.stop_event()
 
 
@@ -197,7 +251,7 @@ async def new_song(service: MusicService, event: AstrMessageEvent):
             await service.reply(event, "暂无新歌数据")
             event.stop_event()
             return
-        await service.list_to_session(event, f"新歌速递 · {label}", songs[:20])
+        await service.list_to_session(event, f"新歌速递 · {label}", songs[:LIST_SHOW_LIMIT])
     except ApiError as err:
         service.log_warn(f"新歌失败: {err}")
         await service.reply(event, f"获取新歌失败：{err}")
@@ -237,24 +291,13 @@ async def suggest(service: MusicService, event: AstrMessageEvent):
     kw = m.group(1).strip()
 
     try:
-        items = await ncmapi.search_suggest(kw, user_key=service.user_key(event))
-        if not items:
+        suggests = await ncmapi.search_suggest(kw, user_key=service.user_key(event))
+        if not suggests:
             await service.reply(event, "暂无补全建议")
         else:
-            data = cardlib.build_generic_card_data(
-                f"「{kw}」的搜索建议",
-                [{"name": w} for w in items],
-                subtitle="关键词补全",
-                cfg=service.cfg(),
-            )
-            await service.reply_card_or_text(
-                event,
-                tpl_name="ncm-generic",
-                data=data,
-                format_text=lambda d: cardlib.format_generic_text(
-                    f"「{kw}」的搜索建议", [{"name": w} for w in items]
-                ),
-            )
+            title = f"「{kw}」的搜索建议"
+            items = [{"name": w} for w in suggests]
+            await _reply_generic(service, event, title, items, subtitle="关键词补全")
     except ApiError as err:
         service.log_warn(f"搜索建议失败: {err}")
         await service.reply(event, f"获取搜索建议失败：{err}")
@@ -266,33 +309,27 @@ async def banner(service: MusicService, event: AstrMessageEvent):
     if not service.cfg().get("enable", True):
         return
     try:
-        items = await ncmapi.banner(user_key=service.user_key(event))
-        if not items:
+        banners = await ncmapi.banner(user_key=service.user_key(event))
+        if not banners:
             await service.reply(event, "暂无轮播数据")
             event.stop_event()
             return
-        data = cardlib.build_generic_card_data(
-            "网易云首页轮播",
-            [
-                {"name": b.get("title") or b.get("typeTitle") or "(无标题)", "sub": b.get("url") or ""}
-                for b in items
-            ],
+        title = "网易云首页轮播"
+        items = [
+            {
+                "name": b.get("title") or b.get("typeTitle") or "(无标题)",
+                "sub": b.get("url") or "",
+            }
+            for b in banners
+        ]
+        await _reply_generic(
+            service,
+            event,
+            title,
+            items,
             subtitle="App 首页 Banner（活动/专辑/歌单推广位）",
             tip="这是网易云 App 首页的轮播推广图；点击对应条目的链接即可在网页打开查看",
-            cfg=service.cfg(),
-        )
-        await service.reply_card_or_text(
-            event,
-            tpl_name="ncm-generic",
-            data=data,
-            format_text=lambda d: cardlib.format_generic_text(
-                "网易云首页轮播",
-                [
-                    {"name": b.get("title") or b.get("typeTitle") or "(无标题)", "sub": b.get("url") or ""}
-                    for b in items
-                ],
-                tip="首页轮播推广位：复制条目链接到浏览器打开查看",
-            ),
+            text_tip="首页轮播推广位：复制条目链接到浏览器打开查看",
         )
     except ApiError as err:
         service.log_warn(f"banner 失败: {err}")
@@ -310,22 +347,14 @@ async def catlist(service: MusicService, event: AstrMessageEvent):
             await service.reply(event, "暂无歌单分类数据")
             event.stop_event()
             return
-        data = cardlib.build_generic_card_data(
-            "歌单分类",
-            [{"name": c["name"], "tag": f"{cardlib.fmt_count(c['count'])}"} for c in cats[:60]],
-            subtitle="歌单标签分类",
-            tip="发送 #ncm精品歌单 分类名 查看该分类精品歌单",
-            cfg=service.cfg(),
-        )
-        await service.reply_card_or_text(
-            event,
-            tpl_name="ncm-generic",
-            data=data,
-            format_text=lambda d: cardlib.format_generic_text(
-                "歌单分类",
-                [{"name": c["name"], "tag": f"{cardlib.fmt_count(c['count'])}"} for c in cats[:60]],
-                tip="发送 #ncm精品歌单 分类名 查看该分类精品歌单",
-            ),
+        title = "歌单分类"
+        tip = "发送 #ncm精品歌单 分类名 查看该分类精品歌单"
+        items = [
+            {"name": c.get("name") or "", "tag": f"{cardlib.fmt_count(c.get('count'))}"}
+            for c in cats[:60]
+        ]
+        await _reply_generic(
+            service, event, title, items, subtitle="歌单标签分类", tip=tip
         )
     except ApiError as err:
         service.log_warn(f"歌单分类失败: {err}")
@@ -343,7 +372,7 @@ async def mv(service: MusicService, event: AstrMessageEvent):
 
 
 async def simi_playlist(service: MusicService, event: AstrMessageEvent):
-    """#ncm相似歌单 关键词：按关键词给出候选歌单列表，回复 #ncm听N 展开曲目"""
+    """#ncm相似歌单 关键词|歌曲id：关键词走歌单检索，纯数字按歌曲 id 走 /simi/playlist"""
     m = service.check_cmd(event, r"^#?(?:ncm|NCM)\s*相似歌单\s+(.+)$")
     if not m:
         return
@@ -351,17 +380,55 @@ async def simi_playlist(service: MusicService, event: AstrMessageEvent):
 
     user_key = service.user_key(event)
     try:
-        pls = await ncmapi.search_playlists(kw, limit=10, user_key=user_key)
+        if re.fullmatch(r"\d+", kw):
+            # /simi/playlist 的参数必须是歌曲 id（传歌单 id/关键词返回空）
+            pls = await ncmapi.simi_playlists(int(kw), limit=10, user_key=user_key)
+        else:
+            pls = await ncmapi.search_playlists(kw, limit=10, user_key=user_key)
         if not pls:
             await service.reply(event, f"没有搜到与「{kw}」相关的歌单")
             event.stop_event()
             return
         await service.playlist_list_to_session(
-            event, f"与「{kw}」相似的歌单", pls, subtitle="回复 #ncm听N 查看该歌单曲目"
+            event,
+            f"与「{kw}」相似的歌单",
+            pls,
+            subtitle=TIP_PLAYLIST_TRACKS,
         )
     except ApiError as err:
         service.log_warn(f"相似歌单失败: {err}")
         await service.reply(event, f"获取相似歌单失败：{err}")
+    event.stop_event()
+
+
+async def related_playlists_cmd(service: MusicService, event: AstrMessageEvent):
+    """#ncm相关歌单 歌单名|id：给出该歌单的相关推荐，回复 #ncm听N 展开曲目"""
+    m = service.check_cmd(event, r"^#?(?:ncm|NCM)\s*相关歌单\s+(.+)$")
+    if not m:
+        return
+    kw = m.group(1).strip()
+
+    user_key = service.user_key(event)
+    try:
+        # /playlist/detail/rcmd/get 的参数必须是「歌单 id」（传歌曲 id 会 502/空），
+        # 因此先按关键词或 ID 定位到具体歌单，再取它的相关推荐。
+        pl = await service.resolve_playlist(kw, user_key)
+        if not pl:
+            await service.reply(event, f"没有搜到「{kw}」对应的歌单")
+            event.stop_event()
+            return
+        title = pl.get("name") or kw
+        pls = await ncmapi.related_playlists(pl.get("id"), limit=10, user_key=user_key)
+        if not pls:
+            await service.reply(event, f"「{title}」暂无相关歌单推荐")
+            event.stop_event()
+            return
+        await service.playlist_list_to_session(
+            event, f"与「{title}」相关的歌单", pls, subtitle=TIP_PLAYLIST_TRACKS
+        )
+    except ApiError as err:
+        service.log_warn(f"相关歌单失败: {err}")
+        await service.reply(event, f"获取相关歌单失败：{err}")
     event.stop_event()
 
 
@@ -375,20 +442,13 @@ async def toplist_artist(service: MusicService, event: AstrMessageEvent):
             await service.reply(event, "暂无歌手榜数据")
             event.stop_event()
             return
-        data = cardlib.build_generic_card_data(
-            "网易云歌手榜",
-            [{"name": a["name"], "cover": a.get("cover") or ""} for a in artists[:15]],
-            subtitle="歌手排行榜",
-            tip="发送 #ncm歌手 歌手名 查看热门歌曲",
-            cfg=service.cfg(),
-        )
-        await service.reply_card_or_text(
-            event,
-            tpl_name="ncm-generic",
-            data=data,
-            format_text=lambda d: cardlib.format_generic_text(
-                "网易云歌手榜", [{"name": a["name"]} for a in artists[:15]], tip="发送 #ncm歌手 歌手名 查看热门歌曲"
-            ),
+        title = "网易云歌手榜"
+        items = [
+            {"name": a.get("name") or "", "cover": a.get("cover") or ""}
+            for a in artists[:15]
+        ]
+        await _reply_generic(
+            service, event, title, items, subtitle="歌手排行榜", tip=TIP_ARTIST_SONGS
         )
     except ApiError as err:
         service.log_warn(f"歌手榜失败: {err}")
@@ -406,33 +466,18 @@ async def album_newest(service: MusicService, event: AstrMessageEvent):
             await service.reply(event, "暂无新碟数据")
             event.stop_event()
             return
-        data = cardlib.build_generic_card_data(
-            "新碟上架",
-            [
-                {
-                    "name": a["name"],
-                    "sub": a["artist"],
-                    "tag": f"{cardlib.fmt_count(a['size'])}首",
-                    "cover": a.get("cover") or "",
-                }
-                for a in albums
-            ],
-            subtitle="最新专辑",
-            tip="发送 #ncm专辑 专辑名 查看曲目",
-            cfg=service.cfg(),
-        )
-        await service.reply_card_or_text(
-            event,
-            tpl_name="ncm-generic",
-            data=data,
-            format_text=lambda d: cardlib.format_generic_text(
-                "新碟上架",
-                [
-                    {"name": a["name"], "sub": a["artist"], "tag": f"{cardlib.fmt_count(a['size'])}首"}
-                    for a in albums
-                ],
-                tip="发送 #ncm专辑 专辑名 查看曲目",
-            ),
+        title = "新碟上架"
+        items = [
+            {
+                "name": a.get("name") or "",
+                "sub": a.get("artist") or "",
+                "tag": f"{cardlib.fmt_count(a.get('size'))}首",
+                "cover": a.get("cover") or "",
+            }
+            for a in albums
+        ]
+        await _reply_generic(
+            service, event, title, items, subtitle="最新专辑", tip=TIP_ALBUM_SEARCH
         )
     except ApiError as err:
         service.log_warn(f"新碟失败: {err}")
@@ -450,20 +495,10 @@ async def top_artists(service: MusicService, event: AstrMessageEvent):
             await service.reply(event, "暂无热门歌手数据")
             event.stop_event()
             return
-        data = cardlib.build_generic_card_data(
-            "热门歌手",
-            [{"name": a["name"], "cover": a.get("cover") or ""} for a in artists],
-            subtitle="热门歌手",
-            tip="发送 #ncm歌手 歌手名 查看热门歌曲",
-            cfg=service.cfg(),
-        )
-        await service.reply_card_or_text(
-            event,
-            tpl_name="ncm-generic",
-            data=data,
-            format_text=lambda d: cardlib.format_generic_text(
-                "热门歌手", [{"name": a["name"]} for a in artists], tip="发送 #ncm歌手 歌手名 查看热门歌曲"
-            ),
+        title = "热门歌手"
+        items = [{"name": a.get("name") or "", "cover": a.get("cover") or ""} for a in artists]
+        await _reply_generic(
+            service, event, title, items, subtitle="热门歌手", tip=TIP_ARTIST_SONGS
         )
     except ApiError as err:
         service.log_warn(f"热门歌手失败: {err}")
@@ -485,22 +520,17 @@ async def top_album(service: MusicService, event: AstrMessageEvent):
             await service.reply(event, "暂无新碟榜数据")
             event.stop_event()
             return
-        data = cardlib.build_generic_card_data(
-            f"新碟榜 · {area if area != 'ALL' else '全部'}",
-            [{"name": a["name"], "sub": a["artist"], "cover": a.get("cover") or ""} for a in albums],
-            subtitle="新碟排行榜",
-            tip="发送 #ncm专辑 专辑名 查看曲目",
-            cfg=service.cfg(),
-        )
-        await service.reply_card_or_text(
-            event,
-            tpl_name="ncm-generic",
-            data=data,
-            format_text=lambda d: cardlib.format_generic_text(
-                f"新碟榜 · {area if area != 'ALL' else '全部'}",
-                [{"name": a["name"], "sub": a["artist"]} for a in albums],
-                tip="发送 #ncm专辑 专辑名 查看曲目",
-            ),
+        title = f"新碟榜 · {area if area != 'ALL' else '全部'}"
+        items = [
+            {
+                "name": a.get("name") or "",
+                "sub": a.get("artist") or "",
+                "cover": a.get("cover") or "",
+            }
+            for a in albums
+        ]
+        await _reply_generic(
+            service, event, title, items, subtitle="新碟排行榜", tip=TIP_ALBUM_SEARCH
         )
     except ApiError as err:
         service.log_warn(f"新碟榜失败: {err}")
@@ -518,33 +548,19 @@ async def top_mv(service: MusicService, event: AstrMessageEvent):
             await service.reply(event, "暂无 MV 榜数据")
             event.stop_event()
             return
-        data = cardlib.build_generic_card_data(
-            "MV 排行",
-            [
-                {
-                    "name": mv["name"],
-                    "sub": mv["artist"],
-                    "tag": f"{cardlib.fmt_count(mv['playCount'])}播放",
-                    "cover": mv.get("cover") or "",
-                }
-                for mv in mvs
-            ],
-            subtitle="MV 排行榜",
-            tip="发送 #ncmMV 关键词 查看 MV 详情与链接",
-            cfg=service.cfg(),
-        )
-        await service.reply_card_or_text(
-            event,
-            tpl_name="ncm-generic",
-            data=data,
-            format_text=lambda d: cardlib.format_generic_text(
-                "MV 排行",
-                [
-                    {"name": mv["name"], "sub": mv["artist"], "tag": f"{cardlib.fmt_count(mv['playCount'])}播放"}
-                    for mv in mvs
-                ],
-                tip="发送 #ncmMV 关键词 查看 MV 详情与链接",
-            ),
+        title = "MV 排行"
+        tip = "发送 #ncmMV 关键词 查看 MV 详情与链接"
+        items = [
+            {
+                "name": mv.get("name") or "",
+                "sub": mv.get("artist") or "",
+                "tag": f"{cardlib.fmt_count(mv.get('playCount'))}播放",
+                "cover": mv.get("cover") or "",
+            }
+            for mv in mvs
+        ]
+        await _reply_generic(
+            service, event, title, items, subtitle="MV 排行榜", tip=tip
         )
     except ApiError as err:
         service.log_warn(f"MV榜失败: {err}")
@@ -562,36 +578,19 @@ async def dj_recommend(service: MusicService, event: AstrMessageEvent):
             await service.reply(event, "暂无电台推荐数据")
             event.stop_event()
             return
-        data = cardlib.build_generic_card_data(
-            "电台推荐",
-            [
-                {
-                    "name": d["name"],
-                    "sub": d.get("desc") or "",
-                    "tag": f"{cardlib.fmt_count(d['subCount'])}订阅" if d.get("subCount") else "",
-                    "cover": d.get("cover") or "",
-                }
-                for d in radios
-            ],
-            subtitle="推荐电台",
-            cfg=service.cfg(),
-        )
-        await service.reply_card_or_text(
-            event,
-            tpl_name="ncm-generic",
-            data=data,
-            format_text=lambda d: cardlib.format_generic_text(
-                "电台推荐",
-                [
-                    {
-                        "name": x["name"],
-                        "sub": x.get("desc") or "",
-                        "tag": f"{cardlib.fmt_count(x['subCount'])}订阅" if x.get("subCount") else "",
-                    }
-                    for x in radios
-                ],
-            ),
-        )
+        title = "电台推荐"
+        items = [
+            {
+                "name": r.get("name") or "",
+                "sub": r.get("desc") or "",
+                "tag": f"{cardlib.fmt_count(r.get('subCount'))}订阅"
+                if r.get("subCount")
+                else "",
+                "cover": r.get("cover") or "",
+            }
+            for r in radios
+        ]
+        await _reply_generic(service, event, title, items, subtitle="推荐电台")
     except ApiError as err:
         service.log_warn(f"电台失败: {err}")
         await service.reply(event, f"获取电台推荐失败：{err}")
@@ -629,23 +628,16 @@ async def playlist_hot_tags(service: MusicService, event: AstrMessageEvent):
             await service.reply(event, "暂无热门分类数据")
             event.stop_event()
             return
-        data = cardlib.build_generic_card_data(
-            "热门歌单分类",
-            [{"name": t["name"], "tag": f"{cardlib.fmt_count(t['usedCount'])}个歌单"} for t in tags],
-            subtitle="热门标签",
-            tip="发送 #ncm歌单榜 分类名 查看该分类歌单",
-            cfg=service.cfg(),
-        )
-        await service.reply_card_or_text(
-            event,
-            tpl_name="ncm-generic",
-            data=data,
-            format_text=lambda d: cardlib.format_generic_text(
-                "热门歌单分类",
-                [{"name": t["name"], "tag": f"{cardlib.fmt_count(t['usedCount'])}个歌单"} for t in tags],
-                tip="发送 #ncm歌单榜 分类名 查看该分类歌单",
-            ),
-        )
+        title = "热门歌单分类"
+        tip = "发送 #ncm歌单榜 分类名 查看该分类歌单"
+        items = [
+            {
+                "name": t.get("name") or "",
+                "tag": f"{cardlib.fmt_count(t.get('usedCount'))}个歌单",
+            }
+            for t in tags
+        ]
+        await _reply_generic(service, event, title, items, subtitle="热门标签", tip=tip)
     except ApiError as err:
         service.log_warn(f"热门分类失败: {err}")
         await service.reply(event, f"获取热门分类失败：{err}")
@@ -704,7 +696,7 @@ async def daily(service: MusicService, event: AstrMessageEvent):
             await service.reply(event, "今日暂无推荐（可能已获取过或没有听歌记录）")
             event.stop_event()
             return
-        await service.list_to_session(event, "每日推荐", songs[:20])
+        await service.list_to_session(event, "每日推荐", songs[:LIST_SHOW_LIMIT])
     except ApiError as err:
         service.log_warn(f"日推失败: {err}")
         await service.reply(event, f"获取每日推荐失败：{err}\n可能需要 #ncm登录")
@@ -792,8 +784,16 @@ ROUTES = [
     Route(
         pattern=re.compile(r"^#?(ncm|NCM)\s*相似歌单\s+(.+)$", re.IGNORECASE),
         name="simi_playlist",
-        doc="#ncm相似歌单 关键词：按关键词给出候选歌单列表，回复 #ncm听N 展开曲目",
+        doc="#ncm相似歌单 关键词|歌曲id：候选歌单列表，回复 #ncm听N 展开曲目",
         run=simi_playlist,
+        # 必须高于 #ncm相似（^…相似\s*(.*)$ 会把「歌单 关键词」整段吃成关键词）
+        priority=1,
+    ),
+    Route(
+        pattern=re.compile(r"^#?(?:ncm|NCM)\s*相关歌单\s+(.+)$", re.IGNORECASE),
+        name="related_playlists_cmd",
+        doc="#ncm相关歌单 歌单名|id：给出该歌单的相关推荐，回复 #ncm听N 展开曲目",
+        run=related_playlists_cmd,
     ),
     Route(
         pattern=re.compile(r"^#?(ncm|NCM)\s*歌手榜$", re.IGNORECASE),
@@ -824,6 +824,8 @@ ROUTES = [
         name="top_mv",
         doc="#ncmMV榜：MV 排行",
         run=top_mv,
+        # 必须高于 #ncmMV（^…MV\s*(.*)$ 会把「榜」吃成关键词并 stop_event）
+        priority=1,
     ),
     Route(
         pattern=re.compile(r"^#?(ncm|NCM)\s*电台$", re.IGNORECASE),

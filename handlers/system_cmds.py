@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import re
 from typing import TYPE_CHECKING
@@ -9,25 +10,57 @@ from astrbot.api.event import AstrMessageEvent
 if TYPE_CHECKING:
     from ..core.service import MusicService
 
-try:
-    from ..core import api as ncmapi
-    from ..core import cards as cardlib
-    from ..core.api import ApiError
-    from ..core.quality import QUALITY_LABEL
-    from ..core.service import PLUGIN_DIR
-except ImportError:
-    from core import api as ncmapi
-    from core import cards as cardlib
-    from core.api import ApiError
-    from core.quality import QUALITY_LABEL
-    from core.service import PLUGIN_DIR
+from ..core import api as ncmapi
+from ..core import cards as cardlib
+from ..core.api import ApiError
+from ..core.messages import MSG_SAVE_CONFIG_FAIL
+from ..core.quality import QUALITY_LABEL
+from ..core.service import PLUGIN_DIR
 from .base import Route
+
+# 版本号进程内缓存（读盘只发生一次，且走线程池）
+_VERSION_CACHE: str | None = None
+
+
+async def _plugin_version() -> str:
+    """读取插件版本号（进程内缓存，读盘走线程池）。"""
+    global _VERSION_CACHE
+    if _VERSION_CACHE is not None:
+        return _VERSION_CACHE
+
+    def _read() -> str:
+        try:
+            import yaml
+
+            with open(
+                os.path.join(PLUGIN_DIR, "metadata.yaml"), "r", encoding="utf-8"
+            ) as f:
+                meta = yaml.safe_load(f) or {}
+            version = str(meta.get("version", "") or "").lstrip("v")
+            return version or "?"
+        except Exception:
+            return "?"
+
+    version = await asyncio.to_thread(_read)
+    if version != "?":
+        # 仅在成功读到有效版本号时落缓存；读盘失败不下毒，下次调用重试
+        _VERSION_CACHE = version
+    return version
+
+
+def _route_count() -> int:
+    """真实指令路由数（帮助卡片统计用）。
+
+    延迟导入：handlers/__init__ 会导入本模块，模块级导入会形成循环。
+    """
+    from . import ALL_ROUTES
+    return len(ALL_ROUTES)
 
 
 async def hot_search(service: MusicService, event: AstrMessageEvent):
     """#ncm热搜：热搜榜"""
-    if not service.cfg().get("enable", True):
-        return
+    # 不受 enable 总开关影响：只读公开榜单，无副作用、不涉及用户数据，
+    # 与 #ncm帮助 同属「保留」的只读指令（enable 描述与 README 已列明）
     try:
         items = await ncmapi.hot_search(user_key=service.user_key(event))
         if not items:
@@ -49,21 +82,14 @@ async def hot_search(service: MusicService, event: AstrMessageEvent):
 
 async def help_cmd(service: MusicService, event: AstrMessageEvent):
     """#ncm帮助：帮助卡片（指令一览）"""
-    if not service.cfg().get("enable", True):
-        return
+    # 不受 enable 总开关影响：内置文案会引导用户「发送 #ncm帮助 查看全部指令」，
+    # enable 描述也承诺保留指令「便于自助排查与恢复」——关闭总开关后帮助若同样
+    # 静默，用户既看不到提示也无从恢复，故帮助必须始终可答（只读、无副作用）
     try:
-        version = "?"
-        try:
-            import yaml
-
-            with open(
-                os.path.join(PLUGIN_DIR, "metadata.yaml"), "r", encoding="utf-8"
-            ) as f:
-                _meta = yaml.safe_load(f) or {}
-            version = str(_meta.get("version", "?")).lstrip("v")
-        except Exception:
-            pass
-        data = cardlib.build_help_card_data(version, service.cfg())
+        version = await _plugin_version()
+        data = cardlib.build_help_card_data(
+            version, service.cfg(), stat_commands=str(_route_count())
+        )
         await service.reply_card_or_text(
             event,
             tpl_name="ncm-help",
@@ -107,7 +133,10 @@ async def quality_cmd(service: MusicService, event: AstrMessageEvent):
         event.stop_event()
         return
     service.plugin.config["quality"] = q
-    service.plugin.config.save_config()
+    if not await service.save_config():
+        await service.reply(event, MSG_SAVE_CONFIG_FAIL)
+        event.stop_event()
+        return
     await service.reply(event, f"已设置音质：{QUALITY_LABEL.get(q, q)}")
     event.stop_event()
 
@@ -121,13 +150,16 @@ async def api_cmd(service: MusicService, event: AstrMessageEvent):
     )
     url = m.group(1).strip().rstrip("/") if m else ""
     service.plugin.config["apiBase"] = url
-    service.plugin.config.save_config()
+    if not await service.save_config():
+        await service.reply(event, MSG_SAVE_CONFIG_FAIL)
+        event.stop_event()
+        return
     await service.reply(event, f"已设置 API 地址：{url}")
     event.stop_event()
 
 
 async def toggle_cmd(service: MusicService, event: AstrMessageEvent):
-    """#ncm 开启/关闭 点歌|解析：功能开关"""
+    """#ncm 开启点歌 / #ncm 关闭解析：功能开关（「开启/关闭」与目标之间不能加空格）"""
     m = re.match(
         r"^#?(?:ncm|NCM)\s*(开启|关闭)(点歌|解析)$",
         event.message_str.strip(),
@@ -139,7 +171,10 @@ async def toggle_cmd(service: MusicService, event: AstrMessageEvent):
         service.plugin.config["enableSongRequest"] = on
     elif what == "解析":
         service.plugin.config["enableResolve"] = on
-    service.plugin.config.save_config()
+    if not await service.save_config():
+        await service.reply(event, MSG_SAVE_CONFIG_FAIL)
+        event.stop_event()
+        return
     await service.reply(event, f"已{'开启' if on else '关闭'}{what}功能")
     event.stop_event()
 
@@ -156,7 +191,7 @@ async def api_test(service: MusicService, event: AstrMessageEvent):
         lst = await ncmapi.search("测试", type_=1, limit=1)
         masked = cardlib.mask_api_base(base)
         await service.reply(
-            event, f"✅ API 连通正常：{masked}\n搜索结果 {len(lst)} 条"
+            event, f"✅ API 连通正常：{masked}\n搜索结果 {len(lst or [])} 条"
         )
     except ApiError as e:
         await service.reply(event, f"❌ API 连接失败：{e}")
@@ -204,7 +239,7 @@ ROUTES = [
             r"^#?(ncm|NCM)\s*(开启|关闭)(点歌|解析)$", re.IGNORECASE
         ),
         name="toggle_cmd",
-        doc="#ncm 开启/关闭 点歌|解析：功能开关",
+        doc="#ncm 开启点歌 / #ncm 关闭解析：功能开关（「开启/关闭」与目标之间不能加空格）",
         run=toggle_cmd,
         admin=True,
     ),
