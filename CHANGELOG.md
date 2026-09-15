@@ -1,5 +1,15 @@
 # 更新日志
 
+## [v2.0.4] - 2026-09-15
+
+### ✨ 新增
+
+-   **新增 `dolby`（杜比全景声）与 `vivid`（臻音全景声）两档音质**：`quality.py` / `_conf_schema.json` / `QUALITY_LADDER` 同步新增；`dolby` 需 cookie `os=pc`，`song_url_v1` 自动注入；`vivid` 由 api-enhanced 服务端自动强制 `os=android, appver=9.5.61`。
+
+### 🔧 优化
+
+-   **`request()` cookie 处理改为合并式**：新增 `_merge_cookie()` 辅助函数，调用方可在 `params["cookie"]` 传额外 cookie 字段（如 `os=pc`），与全局 cookie 合并、同名键以调用方为准。为 `dolby` 档位自动传 `os=pc` 提供底层支持。
+
 ## [v2.0.3] - 2026-09-15
 
 ### 🐛 缺陷修复

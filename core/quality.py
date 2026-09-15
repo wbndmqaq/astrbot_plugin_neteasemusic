@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 # 网易云音质档位（song/url/v1 的 level 参数）
+# vivid（臻音全景声）由 api-enhanced 强制 cookie os=android, appver=9.5.61；
+# dolby（杜比全景声）需调用方传 cookie os=pc（见 _song.py song_url_v1）。
 NCM_QUALITY_LIST = [
     {"label": "自动（按账号权限自适配）", "value": "auto"},
     {"label": "超清母带 jymaster", "value": "jymaster"},
+    {"label": "杜比全景声 dolby", "value": "dolby"},
     {"label": "沉浸环绕声 sky", "value": "sky"},
+    {"label": "臻音全景声 vivid", "value": "vivid"},
     {"label": "高清环绕声 jyeffect", "value": "jyeffect"},
     {"label": "Hi-Res", "value": "hires"},
     {"label": "无损 FLAC", "value": "lossless"},
@@ -16,7 +20,9 @@ NCM_QUALITY_LIST = [
 # 从高到低完整阶梯（auto 的起试档位由账号特权决定，见 quality_candidates）
 QUALITY_LADDER = [
     "jymaster",
+    "dolby",
     "sky",
+    "vivid",
     "jyeffect",
     "hires",
     "lossless",

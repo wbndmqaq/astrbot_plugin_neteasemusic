@@ -142,6 +142,24 @@ def as_int(v: Any, default: int = 0) -> int:
     if not math.isfinite(f):
         return default
     return int(f)
+def _merge_cookie(base: str, extra: str) -> str:
+    """合并两个 cookie 字符串，``extra`` 覆盖 ``base`` 同名键。
+
+    网易云 cookie 形如 ``MUSIC_U=xxx; os=pc``。调用方传的 ``extra``
+    （如 ``os=pc``）会覆盖 ``base`` 里的同名键，其余键保留。
+    """
+    if not base:
+        return extra
+    if not extra:
+        return base
+    merged: dict[str, str] = {}
+    for raw in (base, extra):
+        for part in raw.split(";"):
+            part = part.strip()
+            if "=" in part:
+                k, v = part.split("=", 1)
+                merged[k.strip()] = v.strip()
+    return "; ".join(f"{k}={v}" for k, v in merged.items())
 async def request(
     pathname: str,
     params: dict | None = None,
@@ -153,6 +171,9 @@ async def request(
     当前所有端点都是 GET，且 Cookie 取自全局配置 ``defaultCookie``（多账号按会话
     隔离尚未实现）；``method`` 传非 GET 会显式抛 ``ApiError``（拆包时 POST 分支
     已随死代码移除，拒绝优于静默按 GET 发出）。
+
+    调用方可在 ``params["cookie"]`` 传额外 cookie 字段（如 ``os=pc``），会与全局
+    cookie 合并，调用方同名键覆盖全局。
     """
     params = dict(params or {})
     base = _get_base()
@@ -164,8 +185,9 @@ async def request(
         raise ApiError(f"API 地址格式错误（缺少 http:// 协议头）：{base}")
     url = f"{base}{pathname if pathname.startswith('/') else '/' + pathname}"
     cookie = _get_cookie()
-    if cookie:
-        params["cookie"] = cookie
+    extra_cookie = params.pop("cookie", "")
+    if cookie or extra_cookie:
+        params["cookie"] = _merge_cookie(cookie, extra_cookie)
 
     timeout = aiohttp.ClientTimeout(total=API_TIMEOUT_SEC)
     try:

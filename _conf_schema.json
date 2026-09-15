@@ -43,7 +43,9 @@
     "options": [
       "auto",
       "jymaster",
+      "dolby",
       "sky",
+      "vivid",
       "jyeffect",
       "hires",
       "lossless",
@@ -54,7 +56,9 @@
     "labels": [
       "auto 按账号权限自适配",
       "jymaster 超清母带",
+      "dolby 杜比全景声",
       "sky 沉浸环绕声",
+      "vivid 臻音全景声",
       "jyeffect 高清环绕声",
       "hires Hi-Res",
       "lossless 无损 FLAC",

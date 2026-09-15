@@ -128,7 +128,7 @@ WebUI → 插件管理 → 本插件 → 设置面板。也可用指令热改部
 | `enableSongRequest` | bool | `true` | 点歌功能开关 |
 | `enableResolve` | bool | `true` | 网易云链接/分享卡片自动解析开关（含 `163cn.tv` 短链展开） |
 | `maxList` | int | `10` | 点歌列表最大显示条数（1–20） |
-| `quality` | string | `auto` | 最高播放音质，可选 `auto/jymaster/sky/jyeffect/hires/lossless/exhigh/higher/standard`；`auto` 按账号权限自适应（会员走全阶梯，否则从无损档起） |
+| `quality` | string | `auto` | 最高播放音质，可选 `auto/jymaster/dolby/sky/vivid/jyeffect/hires/lossless/exhigh/higher/standard`；`auto` 按账号权限自适应（会员走全阶梯，否则从无损档起）。`dolby`（杜比全景声）需 PC 设备标识，插件自动传 `os=pc`；`vivid`（臻音全景声）由 API 服务自动处理设备 cookie |
 | `qualityUnblock` | bool | `true` | VIP/灰歌自动解灰兜底（`unblock=true`，音质可能降为源站可用） |
 | `sendVocal` | bool | `true` | 以语音消息方式发送音频 |
 | `uploadFile` | bool | `true` | 以群/好友文件方式发送音频 |

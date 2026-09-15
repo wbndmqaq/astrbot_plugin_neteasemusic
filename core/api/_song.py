@@ -14,6 +14,11 @@ async def song_url_v1(song_id, level: str = "lossless", *, unblock: bool = False
     params = {"id": song_id, "level": level}
     if unblock:
         params["unblock"] = "true"
+    # dolby（杜比全景声）需 cookie os=pc 才能返回正常码率 url；
+    # vivid（臻音全景声）由 api-enhanced 自动强制 os=android, appver=9.5.61，无需此处处理。
+    # request() 会把此 cookie 与全局 cookie 合并（os=pc 覆盖全局同名键）。
+    if level == "dolby":
+        params["cookie"] = "os=pc"
     body = await request("/song/url/v1", params, "get", user_key)
     data = (body or {}).get("data") or []
     d0 = data[0] if isinstance(data, list) and data and isinstance(data[0], dict) else {}
