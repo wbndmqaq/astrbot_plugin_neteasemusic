@@ -178,6 +178,10 @@ def start_poll(service, event: AstrMessageEvent, key: str, max_sec: int = 300):
     def _spawn():
         t = asyncio.create_task(_tick())
         task["jobs"].append(t)
+        # 修剪已完成的旧条目引用：每跳累积一个 task + 一个 timer 句柄，
+        # 5 分钟轮询约 300 条；只保留最近 8 条，避免 jobs 无界增长。
+        if len(task["jobs"]) > 8:
+            del task["jobs"][:-8]
         return t
 
     def _schedule(delay: float):
