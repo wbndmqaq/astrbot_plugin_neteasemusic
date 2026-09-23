@@ -129,7 +129,7 @@ WebUI → 插件管理 → 本插件 → 设置面板。也可用指令热改部
 | `enableResolve` | bool | `true` | 网易云链接/分享卡片自动解析开关（含 `163cn.tv` 短链展开） |
 | `maxList` | int | `10` | 点歌列表最大显示条数（1–20） |
 | `quality` | string | `auto` | 最高播放音质，可选 `auto/jymaster/dolby/sky/vivid/jyeffect/hires/lossless/exhigh/higher/standard`；`auto` 按账号权限自适应（会员走全阶梯，否则从无损档起）。`dolby`（杜比全景声）需 PC 设备标识，插件自动传 `os=pc`；`vivid`（臻音全景声）由 API 服务自动处理设备 cookie |
-| `qualityUnblock` | bool | `true` | VIP/灰歌自动解灰兜底（`unblock=true`，音质可能降为源站可用） |
+| `qualityUnblock` | bool | `true` | VIP/灰歌自动解灰兜底（`unblock=true`，音质可能降为源站可用）。解灰音源来自 API 服务端的第三方代理，请求以主人账号 cookie 发起，相关账号行为风险自负。 |
 | `sendVocal` | bool | `true` | 以语音消息方式发送音频 |
 | `uploadFile` | bool | `true` | 以群/好友文件方式发送音频 |
 | `downloadTimeout` | int | `90000` | 音频下载超时（毫秒） |
@@ -333,7 +333,7 @@ astrbot_plugin_neteasemusic/
 A：部分接口（日推、喜欢、云盘、听歌排行等）需登录。发送 `#ncm登录` 扫码登录，或手动在配置 `defaultCookie` 填入 `MUSIC_U=...` Cookie。注意：Cookie 为**全局共享单账号**，任何一次扫码登录都会覆盖 `defaultCookie`、任何一次管理员 `#ncm登出` 也会清空它（不支持按会话隔离多账号）。
 
 **Q：VIP 歌曲播放失败/只有试听？**
-A：确认 `qualityUnblock`（默认开）启用，且 API 服务端 `ENABLE_GENERAL_UNBLOCK=true`（默认开）。解灰可能将音质降为源站可用音质。
+A：确认 `qualityUnblock`（默认开）启用，且 API 服务端 `ENABLE_GENERAL_UNBLOCK=true`（默认开）。解灰可能将音质降为源站可用音质。解灰音源来自 API 服务端的第三方代理，请求以主人账号 cookie 发起，相关账号行为风险自负。
 
 **Q：QQ 官方机器人发不出音频文件？**
 A：AstrBot ≥ 4.27.3 起 QQ 官方适配器支持大文件分片上传（`qqofficialChunkedUpload` 默认开），FLAC/>10MB 也可正常发送。若分片不可用或仍发送失败，开启 `ffmpegCompress`（默认开）会用 ffmpeg 压成紧凑 mp3 兜底——请确认本机已安装 ffmpeg。

@@ -24,11 +24,7 @@ async def pick_song(service: MusicService, event: AstrMessageEvent):
     if not m:
         return
     keyword = m.group(1).strip()
-
-    if not keyword:
-        await service.reply(event, "用法：#ncm点歌 关键词")
-        event.stop_event()
-        return
+    # 路由正则 (.+)$ 作用于 strip 过的消息，末字符必为非空白，keyword 不可能为空
     try:
         await service.reply(event, f"正在搜索：{keyword}")
         page_size = max(1, min(ncmapi.as_int(cfg.get("maxList") or 10, 10), 20))
@@ -58,7 +54,7 @@ async def choose_song(service: MusicService, event: AstrMessageEvent):
     )
     n = int(m.group(1) or m.group(2) or 0) if m else 0
     # 裸 #听N（无 ncm 前缀）仅由最近活跃的音乐插件响应，避免多插件同装时抢占顺序取决于加载顺序
-    if m and m.group(2) and not await service.is_session_owner():
+    if m and m.group(2) and not await service.is_session_owner(event):
         return
     scope = service.scope(event)
     session = await cardlib.SessionStore.get(service.plugin, scope)
@@ -132,7 +128,7 @@ async def play_all(service: MusicService, event: AstrMessageEvent):
     has_prefix = bool(
         re.match(r"^#?(?:ncm|NCM)", event.message_str.strip(), re.IGNORECASE)
     )
-    if not has_prefix and not await service.is_session_owner():
+    if not has_prefix and not await service.is_session_owner(event):
         return
     scope = service.scope(event)
     session = await cardlib.SessionStore.get(service.plugin, scope)
@@ -201,11 +197,7 @@ async def play_direct(service: MusicService, event: AstrMessageEvent):
     if not m:
         return
     keyword = m.group(1).strip()
-
-    if not keyword:
-        await service.reply(event, "用法：#ncm播放 关键词")
-        event.stop_event()
-        return
+    # 路由正则 (.+)$ 作用于 strip 过的消息，末字符必为非空白，keyword 不可能为空
     try:
         lst = await ncmapi.search(
             keyword, type_=1, limit=1, user_key=service.user_key(event)

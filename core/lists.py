@@ -86,7 +86,7 @@ async def start_select(
     base = dict(session) if session else {}
     base.update({"type": "songs", "keyword": keyword, "data": lst, "action": action})
     await cardlib.SessionStore.set(service.plugin, scope, base)
-    await service.mark_session_owner()
+    await service.mark_session_owner(scope)
     tip = f"回复 #ncm听N 即可{verb}"
     if service.cfg().get("renderListCard", True):
         data = cardlib.build_list_card_data(
@@ -110,7 +110,7 @@ async def list_to_session(
     await cardlib.SessionStore.set(
         service.plugin, scope, {"type": "songs", "keyword": keyword, "data": songs}
     )
-    await service.mark_session_owner()
+    await service.mark_session_owner(scope)
     def text() -> str:
         return cardlib.format_song_list(songs, keyword, tip=tip)
     if service.cfg().get("renderListCard", True):

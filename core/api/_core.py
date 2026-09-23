@@ -160,6 +160,13 @@ def _merge_cookie(base: str, extra: str) -> str:
                 k, v = part.split("=", 1)
                 merged[k.strip()] = v.strip()
     return "; ".join(f"{k}={v}" for k, v in merged.items())
+def _safe_url(url: str) -> str:
+    """报错/日志用的安全 URL：去掉 query。
+
+    api-enhanced 以 URL query 传 cookie（``?cookie=MUSIC_U=...``），任何进到
+    用户可见报错或日志里的 URL 一律只保留 host+path，防止 cookie 泄露。
+    """
+    return str(url or "").split("?", 1)[0]
 async def request(
     pathname: str,
     params: dict | None = None,
@@ -198,16 +205,18 @@ async def request(
         async with sess.get(url, params=_query_safe_params(params), timeout=timeout) as res:
             return await _handle_response(res, pathname)
     except aiohttp.ClientConnectorError as e:
-        raise ApiError(f"无法连接网易云 API（{base}），请确认 api-enhanced 服务已启动") from e
+        raise ApiError(f"无法连接网易云 API（{_safe_url(base)}），请确认 api-enhanced 服务已启动") from e
     except aiohttp.ServerTimeoutError as e:
-        raise ApiError(f"请求超时：{base}") from e
+        raise ApiError(f"请求超时：{_safe_url(base)}") from e
     except aiohttp.ClientError as e:
-        raise ApiError(f"网络错误：{e}") from e
+        # aiohttp 部分异常（如 ClientResponseError）的 str 会内嵌完整请求 URL
+        # （含 cookie query），不能直接内嵌 {e}：只保留异常类型 + 去 query 的 URL
+        raise ApiError(f"网络错误（{type(e).__name__}）：{_safe_url(url)}") from e
     except (TimeoutError, asyncio.TimeoutError) as e:
         # ClientTimeout(total=...) 到期抛的是 asyncio.TimeoutError（3.11 起即内建 TimeoutError），
         # 不是 aiohttp.ClientError，只写 ClientError 会让总超时穿透到 handler：except ApiError
         # 接不住 → 用户拿不到错误回复，且 event.stop_event() 不执行。
-        raise ApiError(f"请求超时：{base}") from e
+        raise ApiError(f"请求超时：{_safe_url(base)}") from e
 async def _handle_response(res: aiohttp.ClientResponse, pathname: str = "") -> dict:
     status = res.status
     try:

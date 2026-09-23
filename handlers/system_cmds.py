@@ -121,11 +121,21 @@ async def settings(service: MusicService, event: AstrMessageEvent):
 
 
 async def quality_cmd(service: MusicService, event: AstrMessageEvent):
-    """#ncm音质 <档位>：修改音质档位"""
+    """#ncm音质 [档位]：查看/修改音质档位"""
+    # 参数可选：裸 #ncm音质（无参数）时路由也能命中，回复当前档位与用法，避免零响应
     m = re.match(
-        r"^#?(?:ncm|NCM)\s*音质\s*(.+)$", event.message_str.strip(), re.IGNORECASE
+        r"^#?(?:ncm|NCM)\s*音质(?:\s*(.+))?$", event.message_str.strip(), re.IGNORECASE
     )
-    q = (m.group(1).strip().lower() if m else "").strip()
+    q = (m.group(1).strip().lower() if m and m.group(1) else "").strip()
+    if not q:
+        cur = str(service.cfg().get("quality") or "auto")
+        await service.reply(
+            event,
+            f"当前音质档位：{QUALITY_LABEL.get(cur, cur)}\n"
+            f"用法：#ncm音质 <档位>，可选：{' / '.join(QUALITY_LABEL.keys())}",
+        )
+        event.stop_event()
+        return
     if q not in QUALITY_LABEL:
         await service.reply(
             event, f"音质档位无效。可选：{' / '.join(QUALITY_LABEL.keys())}"
@@ -220,9 +230,9 @@ ROUTES = [
         priority=6,
     ),
     Route(
-        pattern=re.compile(r"^#?(ncm|NCM)\s*音质\s*(.+)$", re.IGNORECASE),
+        pattern=re.compile(r"^#?(ncm|NCM)\s*音质(?:\s*(.+))?$", re.IGNORECASE),
         name="quality_cmd",
-        doc="#ncm音质 <档位>：修改音质档位",
+        doc="#ncm音质 [档位]：查看/修改音质档位",
         run=quality_cmd,
         admin=True,
         priority=6,

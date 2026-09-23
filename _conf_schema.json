@@ -2,6 +2,7 @@
   "defaultCookie": {
     "type": "string",
     "default": "",
+    "secret": true,
     "description": "网易云登录 Cookie（MUSIC_U=... 等）。可手动粘贴，或由 #ncm登录 扫码自动写入，后写覆盖先写。留空则走 API 端 NETEASE_COOKIE 环境变量。",
     "hint": "从浏览器已登录的网易云页面复制：F12 → Network → 任一请求 → 请求头 Cookie 整段粘贴。注意：此处明文存储，请留意 WebUI 面板访问权限。"
   },

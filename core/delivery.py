@@ -380,7 +380,22 @@ async def _compress_to_mp3(local_path: str, bitrate_kbps: int = 128) -> str | No
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.DEVNULL,
         )
-        return_code = await proc.wait()
+        # ffmpeg 偶发挂起（坏文件/管道卡死）会永久阻塞 wait()，卡死整个连播循环；
+        # 120 秒足够压完一首，超时按压缩失败处理并杀掉残留进程
+        return_code = await asyncio.wait_for(proc.wait(), timeout=120)
+    except (TimeoutError, asyncio.TimeoutError):
+        try:
+            proc.kill()
+            await proc.wait()
+        except Exception:  # noqa: BLE001
+            pass
+        # 清理压缩到一半的半成品，避免残留被误当成有效音频
+        try:
+            if os.path.exists(out_path):
+                os.remove(out_path)
+        except Exception:  # noqa: BLE001
+            pass
+        return None
     except Exception:
         return None
     if return_code != 0 or not os.path.exists(out_path):

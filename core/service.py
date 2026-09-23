@@ -48,26 +48,24 @@ YRC_MAX_LINES = 72
 QR_IMAGE_KEEP_SEC = 120
 
 
-def _owner_marker_path() -> Path:
-    """三个音乐插件（网易云/酷狗/QQ）共用的「最近活跃归属」标记文件路径。
-
-    用于裸 #听N 的跨插件抢占：点歌出列表时写入本插件名，裸 #听N 仅由最近
-    活跃的插件响应，避免多插件同装时抢占顺序取决于插件加载顺序。
-    """
+def _owner_marker_path() -> "Path | None":
+    """裸 #听N 跨插件仲裁标记（三音乐插件共用）。固定在 data/plugin_data/ 下；
+    取不到路径时返回 None（仲裁退化为「无主」，绝不写插件自身目录）。"""
     try:
-        from astrbot.api.star import StarTools
-
-        # 必须显式传插件名：StarTools 只在调用栈位于插件主模块（main.py）时才能
-        # 反查插件元数据，本函数在 core/service.py 里，不传名会抛 RuntimeError。
-        data_dir = StarTools.get_data_dir(PLUGIN_NAME)
-        return data_dir.parent / "_music_session_owner.json"
+        from astrbot.core.utils.astrbot_path import get_astrbot_data_path
+        return Path(get_astrbot_data_path()) / "plugin_data" / "_music_session_owner.json"
     except Exception:
-        return Path(__file__).resolve().parent.parent / "_music_session_owner.json"
+        return None
 
 
 def _mv_name_key(text: str) -> str:
     """MV/歌曲名归一化：去空白与常见括号修饰，便于同名比对。"""
     return re.sub(r"[\s\-_·（）()《》\[\]【】]", "", text or "").lower()
+
+
+# ──────────── 裸 #听N 跨插件仲裁标记写失败的一次性告警标志 ────────────
+# 模块级：磁盘只读等持续性故障不逐首刷日志，进程生命周期内只告警一次
+_owner_marker_warned = False
 
 
 def is_plugin_command_msg(msg: str) -> bool:
@@ -150,38 +148,87 @@ class MusicService:
 
     # ──────────── 裸 #听N 跨插件抢占 ────────────
 
-    async def mark_session_owner(self) -> None:
-        """点歌出列表后，把本插件记录为「最近活跃的音乐插件」。"""
-        name = str(getattr(self.plugin, "name", "") or "")
+    async def mark_session_owner(self, scope: str) -> None:
+        """点歌出列表后，把本插件记录为该 scope（群/私聊）内「最近活跃的音乐插件」。
 
-        def _w():
+        标记文件格式（三音乐插件统一，v2）：
+        ``{"version": 2, "scopes": {"<scope>": {"plugin": "<插件名>", "ts": <unix秒>}}}``；
+        读到旧格式（无 scopes 键）一律视为「无主」。
+        """
+        global _owner_marker_warned
+        name = PLUGIN_NAME
+
+        def _w() -> bool:
             try:
                 p = _owner_marker_path()
+                if p is None:
+                    return False
                 p.parent.mkdir(parents=True, exist_ok=True)
-                tmp = p.with_name(p.name + ".tmp")
+                try:
+                    data = json.loads(p.read_text(encoding="utf-8"))
+                except Exception:
+                    data = {}
+                scopes = data.get("scopes") if isinstance(data, dict) else None
+                scopes = dict(scopes) if isinstance(scopes, dict) else {}
+                scopes[scope] = {"plugin": name, "ts": int(time.time())}
+                # 防止长期跨群累积无界增长：超 256 个 scope 按 ts 保留最新 256 个
+                if len(scopes) > 256:
+                    keep = sorted(
+                        scopes.items(),
+                        key=lambda kv: (kv[1].get("ts") or 0) if isinstance(kv[1], dict) else 0,
+                        reverse=True,
+                    )[:256]
+                    scopes = dict(keep)
+                # 临时文件名带插件专属后缀，避免三插件并发写同一 tmp 互相踩踏
+                tmp = p.with_name(f"{p.stem}.{PLUGIN_NAME}.tmp")
                 tmp.write_text(
-                    json.dumps({"plugin": name, "ts": int(time.time())}, ensure_ascii=False),
+                    json.dumps({"version": 2, "scopes": scopes}, ensure_ascii=False),
                     encoding="utf-8",
                 )
                 os.replace(tmp, p)  # 原子替换，避免并发写坏
+                return True
             except Exception:
-                pass
+                return False
 
-        await asyncio.to_thread(_w)
+        ok = await asyncio.to_thread(_w)
+        if not ok and not _owner_marker_warned:
+            _owner_marker_warned = True
+            self.log_warn("写入跨插件仲裁标记失败，裸 #听N 仲裁退化为「无主」（仅告警一次）")
 
-    async def is_session_owner(self) -> bool:
-        """本插件是否为最近活跃的音乐插件（无标记时视为 True，退化为「谁有会话谁响应」）。"""
-        name = str(getattr(self.plugin, "name", "") or "")
+    async def is_session_owner(self, event: AstrMessageEvent) -> bool:
+        """本插件是否为该 scope（群/私聊）内最近活跃的音乐插件。
+
+        读取语义（三音乐插件统一口径）：
+          - 取不到标记路径 → False；文件不存在 → True（无仲裁条件，退化为
+            「谁有会话谁响应」）；
+          - 内容损坏/旧格式（无 scopes 键）/本 scope 无归属记录 → True（视为无主）；
+          - 读取抛异常 → False：宁可偶尔静默，也不能多插件双重响应。
+        """
+        scope = self.scope(event)
+        name = PLUGIN_NAME
 
         def _r() -> bool:
+            p = _owner_marker_path()
+            if p is None:
+                return False
             try:
-                p = _owner_marker_path()
                 if not p.exists():
                     return True
-                data = json.loads(p.read_text(encoding="utf-8"))
-                return data.get("plugin") == name
+                raw = p.read_text(encoding="utf-8")
             except Exception:
-                return True
+                logger.debug("[neteasemusic] 读取跨插件仲裁标记失败，本次按非本插件处理")
+                return False
+            try:
+                data = json.loads(raw)
+            except Exception:
+                return True  # 内容损坏：视为无主，退化为「谁有会话谁响应」
+            scopes = data.get("scopes") if isinstance(data, dict) else None
+            if not isinstance(scopes, dict):
+                return True  # 旧格式（无 scopes 键）：视为无主
+            entry = scopes.get(scope)
+            if not isinstance(entry, dict):
+                return True  # 本群/私聊无主
+            return entry.get("plugin") == name
 
         return await asyncio.to_thread(_r)
 
@@ -310,13 +357,23 @@ class MusicService:
             self.log_warn(f"_reply 发送失败: {e}\n{_tb.format_exc()}")
 
     def scope(self, event: AstrMessageEvent) -> str:
+        """会话作用域键（群/私聊）。
+
+        加平台前缀防止多平台 ID 撞车（如 aiocqhttp 群号与 qqofficial 用户 ID 相同）。
+        注意：KV 会话键随之变化，旧格式（无前缀）会话在升级后一次性失效
+        （TTL 仅 10 分钟，影响可接受）。
+        """
         gid = getattr(event.message_obj, "group_id", None)
-        if gid:
-            return str(gid)
-        return event.get_sender_id()
+        return f"{event.get_platform_name()}:{gid or event.get_sender_id()}"
 
     def user_key(self, event: AstrMessageEvent) -> str:
-        return str(event.get_sender_id() or "")
+        """用户维度键。
+
+        加平台前缀与 scope() 同理：不同平台的用户 ID 可能重复。
+        本插件中 user_key 只用作进程内临时缓存/轮询任务的键（登录态是全局
+        cookie 配置，不按 user_key 持久化），加前缀无迁移成本。
+        """
+        return f"{event.get_platform_name()}:{event.get_sender_id()}"
 
     def check_cmd(
         self, event: AstrMessageEvent, pattern: str, *, song_request: bool = False
